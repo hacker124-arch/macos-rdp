@@ -19,7 +19,6 @@ jobs:
           sudo dseditgroup -o edit -a runneradmin -t user admin || true
           sudo dscl . -passwd /Users/runneradmin arham123 || true
 
-          # Keep the display awake to prevent black screen
           sudo pmset -a sleep 0
           sudo pmset -a displaysleep 0
           sudo pmset -a disksleep 0
@@ -30,6 +29,9 @@ jobs:
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -users runneradmin -privs -all -restart -agent -privs -all
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -clientopts -setvnclegacy -vnclegacy yes
           sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null || true
+
+          # Safely restart loginwindow in the background to wake up the display
+          sudo nohup bash -c 'sleep 5; killall loginwindow' >/dev/null 2>&1 &
 
       - name: Start TCP Tunnel with Pinggy
         run: |
