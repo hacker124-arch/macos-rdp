@@ -35,8 +35,7 @@ jobs:
       - name: Start TCP Tunnel with Pinggy
         run: |
           ssh -p 443 -o StrictHostKeyChecking=no -R0:localhost:5900 tcp@free.pinggy.io > pinggy.log 2>&1 &
-          echo "Waiting for Pinggy tunnel URL..."
-          sleep 6
+          sleep 5
           cat pinggy.log
-          echo "Tunnel is active! Keeping connection open..."
-          sleep 3600
+          echo "Tunnel is active! Streaming connection logs..."
+          tail -f pinggy.log
