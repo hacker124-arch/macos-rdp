@@ -12,16 +12,13 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Create User and Enable Screen Sharing
+      - name: Configure User and Enable Screen Sharing
         run: |
-          sudo dscl . -create /Users/runneradmin
-          sudo dscl . -create /Users/runneradmin UserShell /bin/bash
-          sudo dscl . -create /Users/runneradmin RealName "Runner Admin"
-          sudo dscl . -create /Users/runneradmin UniqueID 501
-          sudo dscl . -create /Users/runneradmin PrimaryGroupID 20
-          sudo dscl . -passwd /Users/runneradmin P@ssw0rd!
-          sudo createhomedir -u runneradmin -c
-          sudo dseditgroup -o edit -a runneradmin -t user admin
+          sudo dscl . -passwd /Users/runneradmin P@ssw0rd! || true
+          sudo dscl . -create /Users/runneradmin UserShell /bin/bash || true
+          sudo dscl . -create /Users/runneradmin RealName "Runner Admin" || true
+          sudo createhomedir -u runneradmin -c || true
+          sudo dseditgroup -o edit -a runneradmin -t user admin || true
 
           sudo mkdir -p /Library/Preferences
           echo "P@ssw0rd!" | perl -we 'BEGIN { @k = unpack "C*", pack "H*", "1734516E8BA8C5E2FF1C39567390ADCA"}; $_ = <>; chomp; s/^(.{8})./$1/; @p = unpack "C*", $_; foreach (@k) { printf "%02X", $_ ^ (shift @p || 0) }; print "\n"' | sudo tee /Library/Preferences/com.apple.VNCSettings.txt
