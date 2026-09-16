@@ -30,9 +30,12 @@ jobs:
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -clientopts -setvnclegacy -vnclegacy yes
           sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null || true
 
-          # Safely restart loginwindow in the background to wake up the display
           sudo nohup bash -c 'sleep 5; killall loginwindow' >/dev/null 2>&1 &
 
       - name: Start TCP Tunnel with Pinggy
         run: |
-          ssh -p 443 -o StrictHostKeyChecking=no -R0:localhost:5900 tcp@free.pinggy.io
+          ssh -p 443 -o StrictHostKeyChecking=no -R0:localhost:5900 tcp@free.pinggy.io > pinggy.log 2>&1 &
+          echo "Waiting for Pinggy tunnel URL..."
+          sleep 6
+          cat pinggy.log
+          while true; do sleep 30; done
