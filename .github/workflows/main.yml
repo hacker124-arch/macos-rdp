@@ -1,24 +1,44 @@
-name: MacRDP
-on: 
+name: macOS Remote Desktop
+
+on:
   workflow_dispatch:
+
 jobs:
-  build:
-    name: MacRDP
+  macos-rdp:
     runs-on: macos-latest
-    
-    steps:                 
-    - name: Enabling Remote Access
-      env:
-        NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
-      run: |
-          curl -s -o start.sh -L "https://raw.githubusercontent.com/JohnnyNetsec/github-vm/main/mac/start.sh"
-          chmod +x start.sh
-          bash start.sh "$NGROK_AUTH_TOKEN"
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Enable Screen Sharing and Set Password
+        run: |
+          VNC_PASSWORD="password123"
+          echo "=================================================="
+          echo "👉 VNC PASSWORD IS: $VNC_PASSWORD"
+          echo "=================================================="
           
-    - name: Log In Details To VNC Server
-      run: |
-         chmod +x login.sh
-         bash login.sh
-         
-    - name: MacOS System running...
-      uses: mxschmitt/action-tmate@v2
+          sudo mkdir -p /Library/Preferences
+          echo "$VNC_PASSWORD" | perl -we 'BEGIN { @k = unpack "C*", pack "H*", "1734516E8BA8C5E2FF1C39567390ADCA"}; $_ = <>; chomp; s/^(.{8})./$1/; @p = unpack "C*", $_; foreach (@k) { printf "%02X", $_ ^ (shift @p || 0) }; print "\n"' | sudo tee /Library/Preferences/com.apple.VNCSettings.txt
+          
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -users root -privs -all -restart -agent -privs -all
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -clientopts -setvnclegacy -vnclegacy yes
+          sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null || true
+
+      - name: Install Dependencies & noVNC
+        run: |
+          brew install python3 cloudflare/cloudflare/cloudflared
+          pip3 install websockify --break-system-packages
+          git clone https://github.com/novnc/noVNC.git /tmp/novnc
+
+      - name: Start Web VNC and Cloudflare Tunnel
+        run: |
+          python3 -m websockify --web /tmp/novnc 8080 localhost:5900 &
+          sleep 3
+          
+          # Start Cloudflare free quick tunnel (No credit card needed!)
+          cloudflared tunnel --url http://localhost:8080 &
+          sleep 6
+          
+          while true; do sleep 30; done
