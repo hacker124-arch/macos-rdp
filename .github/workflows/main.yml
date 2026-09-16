@@ -1,11 +1,11 @@
-name: macOS Remote Desktop
+name: macOS Monterey Remote Desktop
 
 on:
   workflow_dispatch:
 
 jobs:
   macos-rdp:
-    runs-on: macos-latest
+    runs-on: macos-12
     timeout-minutes: 60
 
     steps:
@@ -14,10 +14,8 @@ jobs:
 
       - name: Configure User and Enable Screen Sharing
         run: |
-          sudo dscl . -passwd /Users/runneradmin P@ssw0rd! || true
           sudo dscl . -create /Users/runneradmin UserShell /bin/bash || true
           sudo dscl . -create /Users/runneradmin RealName "Runner Admin" || true
-          sudo createhomedir -u runneradmin -c || true
           sudo dseditgroup -o edit -a runneradmin -t user admin || true
 
           sudo mkdir -p /Library/Preferences
