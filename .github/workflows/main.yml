@@ -28,6 +28,4 @@ jobs:
 
       - name: Start TCP Tunnel with Pinggy
         run: |
-          ssh -p 443 -o StrictHostKeyChecking=no -R0:localhost:5900 tcp@free.pinggy.io &
-          sleep 10
-          while true; do sleep 30; done
+          ssh -p 443 -o StrictHostKeyChecking=no -R0:localhost:5900 tcp@free.pinggy.io
