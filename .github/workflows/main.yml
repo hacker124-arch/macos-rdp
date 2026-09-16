@@ -12,33 +12,26 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Enable Screen Sharing and Set Password
+      - name: Create User and Enable Screen Sharing
         run: |
-          VNC_PASSWORD="password123"
-          echo "=================================================="
-          echo "👉 VNC PASSWORD IS: $VNC_PASSWORD"
-          echo "=================================================="
-          
+          sudo dscl . -create /Users/runneradmin
+          sudo dscl . -create /Users/runneradmin UserShell /bin/bash
+          sudo dscl . -create /Users/runneradmin RealName "Runner Admin"
+          sudo dscl . -create /Users/runneradmin UniqueID 501
+          sudo dscl . -create /Users/runneradmin PrimaryGroupID 20
+          sudo dscl . -passwd /Users/runneradmin P@ssw0rd!
+          sudo createhomedir -u runneradmin -c
+          sudo dseditgroup -o edit -a runneradmin -t user admin
+
           sudo mkdir -p /Library/Preferences
-          echo "$VNC_PASSWORD" | perl -we 'BEGIN { @k = unpack "C*", pack "H*", "1734516E8BA8C5E2FF1C39567390ADCA"}; $_ = <>; chomp; s/^(.{8})./$1/; @p = unpack "C*", $_; foreach (@k) { printf "%02X", $_ ^ (shift @p || 0) }; print "\n"' | sudo tee /Library/Preferences/com.apple.VNCSettings.txt
+          echo "P@ssw0rd!" | perl -we 'BEGIN { @k = unpack "C*", pack "H*", "1734516E8BA8C5E2FF1C39567390ADCA"}; $_ = <>; chomp; s/^(.{8})./$1/; @p = unpack "C*", $_; foreach (@k) { printf "%02X", $_ ^ (shift @p || 0) }; print "\n"' | sudo tee /Library/Preferences/com.apple.VNCSettings.txt
           
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -users root -privs -all -restart -agent -privs -all
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -users runneradmin -privs -all -restart -agent -privs -all
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -clientopts -setvnclegacy -vnclegacy yes
           sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null || true
 
-      - name: Install Dependencies & noVNC
+      - name: Start TCP Tunnel with Pinggy
         run: |
-          brew install python3 cloudflare/cloudflare/cloudflared
-          pip3 install websockify --break-system-packages
-          git clone https://github.com/novnc/noVNC.git /tmp/novnc
-
-      - name: Start Web VNC and Cloudflare Tunnel
-        run: |
-          python3 -m websockify --web /tmp/novnc 8080 localhost:5900 &
-          sleep 3
-          
-          # Start Cloudflare free quick tunnel (No credit card needed!)
-          cloudflared tunnel --url http://localhost:8080 &
-          sleep 6
-          
+          ssh -p 443 -o StrictHostKeyChecking=no -R0:localhost:5900 tcp@free.pinggy.io &
+          sleep 10
           while true; do sleep 30; done
