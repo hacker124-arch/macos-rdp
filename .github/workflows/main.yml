@@ -38,4 +38,5 @@ jobs:
           echo "Waiting for Pinggy tunnel URL..."
           sleep 6
           cat pinggy.log
-          while true; do sleep 30; done
+          echo "Tunnel is active! Keeping connection open..."
+          sleep 3600
