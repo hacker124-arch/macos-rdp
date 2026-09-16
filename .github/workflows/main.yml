@@ -19,6 +19,11 @@ jobs:
           sudo dseditgroup -o edit -a runneradmin -t user admin || true
           sudo dscl . -passwd /Users/runneradmin arham123 || true
 
+          # Keep the display awake to prevent black screen
+          sudo pmset -a sleep 0
+          sudo pmset -a displaysleep 0
+          sudo pmset -a disksleep 0
+
           sudo mkdir -p /Library/Preferences
           echo "arham123" | perl -we 'BEGIN { @k = unpack "C*", pack "H*", "1734516E8BA8C5E2FF1C39567390ADCA"}; $_ = <>; chomp; s/^(.{8})./$1/; @p = unpack "C*", $_; foreach (@k) { printf "%02X", $_ ^ (shift @p || 0) }; print "\n"' | sudo tee /Library/Preferences/com.apple.VNCSettings.txt
           
