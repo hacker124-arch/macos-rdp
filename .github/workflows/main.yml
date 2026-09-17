@@ -33,5 +33,23 @@ jobs:
           sudo nohup bash -c 'sleep 5; killall loginwindow' >/dev/null 2>&1 &
 
       - name: Start TCP Tunnel with Pinggy
-        run: |
-          ssh -n -N -p 443 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -R0:localhost:5900 tcp@free.pinggy.io
+    run: |
+      ssh -n -N -p 443 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -R0:localhost:5900 tcp@free.pinggy.io > pinggy.log 2>&1 &
+      SSH_PID=$!
+
+      echo "Waiting for Pinggy tunnel URL..."
+      for i in {1..30}; do
+        if grep -q "tcp://" pinggy.log 2>/dev/null; then
+          break
+        fi
+        sleep 1
+      done
+
+      echo "--- PINGGY TUNNEL URL ---"
+      cat pinggy.log
+      echo "-------------------------"
+
+      # Keep the step alive by monitoring the SSH tunnel process
+      while kill -0 $SSH_PID 2>/dev/null; do
+        sleep 5
+      done
