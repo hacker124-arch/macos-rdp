@@ -34,23 +34,4 @@ jobs:
 
       - name: Start TCP Tunnel with Pinggy
         run: |
-          ssh -n -N -p 443 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -R0:localhost:5900 tcp@free.pinggy.io > pinggy.log 2>&1 &
-          SSH_PID=$!
-          
-          echo "Establishing tunnel..."
-          for i in {1..20}; do
-            if grep -q "tcp://" pinggy.log 2>/dev/null; then
-              break
-            fi
-            sleep 1
-          done
-          
-          if ! kill -0 $SSH_PID 2>/dev/null; then
-            echo "Error: SSH tunnel process died!"
-            cat pinggy.log
-            exit 1
-          fi
-          
-          cat pinggy.log
-          echo "Tunnel is active! Holding job open..."
-          sleep 3600
+          ssh -p 443 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -R0:localhost:5900 tcp@free.pinggy.io
