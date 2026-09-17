@@ -33,5 +33,5 @@ jobs:
           sudo nohup bash -c 'sleep 5; killall loginwindow' >/dev/null 2>&1 &
 
       - name: Start TCP Tunnel with Pinggy
-        run: |
-          ssh -p 443 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -R0:localhost:5900 tcp@free.pinggy.io
+    run: |
+      ssh -n -N -p 443 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -R0:localhost:5900 tcp@free.pinggy.io
