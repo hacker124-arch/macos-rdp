@@ -34,16 +34,28 @@ jobs:
 
       - name: Start TCP Tunnel with Pinggy
         run: |
+          rm -f pinggy.log
           ssh -n -N -p 443 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -R0:localhost:5900 tcp@free.pinggy.io > pinggy.log 2>&1 &
           SSH_PID=$!
 
           echo "Waiting for Pinggy tunnel URL..."
-          for i in {1..30}; do
+          for i in {1..15}; do
             if grep -q "tcp://" pinggy.log 2>/dev/null; then
               break
             fi
+            if ! kill -0 $SSH_PID 2>/dev/null; then
+              echo "Error: SSH tunnel process died prematurely!"
+              cat pinggy.log
+              exit 1
+            fi
             sleep 1
           done
+
+          if ! grep -q "tcp://" pinggy.log 2>/dev/null; then
+            echo "Error: Timeout waiting for Pinggy URL. Log contents:"
+            cat pinggy.log
+            exit 1
+          fi
 
           echo "--- PINGGY TUNNEL URL ---"
           cat pinggy.log
