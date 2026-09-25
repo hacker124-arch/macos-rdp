@@ -33,7 +33,22 @@ jobs:
           sudo nohup bash -c 'sleep 5; killall loginwindow' >/dev/null 2>&1 &
 
       - name: Start ngrok TCP Tunnel
-        uses: ngrok/ngrok-action@v1
-        with:
-          command: tcp 5900
-          auth-token: ${{ secrets.NGROK_AUTHTOKEN }}
+        env:
+          NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
+        run: |
+          echo "Installing ngrok..."
+          brew install ngrok/core/ngrok
+          
+          echo "Configuring auth token..."
+          ngrok config add-authtoken $NGROK_AUTHTOKEN
+          
+          echo "Starting TCP tunnel on port 5900..."
+          ngrok tcp 5900 --log=stdout &
+          
+          echo "Waiting for tunnel URL..."
+          sleep 6
+          
+          echo "Job is active and running!"
+          while true; do
+            sleep 30
+          done
