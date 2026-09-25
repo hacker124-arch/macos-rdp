@@ -35,13 +35,21 @@ jobs:
       - name: Start TCP Tunnel with Pinggy
         run: |
           echo "Starting Pinggy tunnel..."
-          ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -p 443 -R0:localhost:5900 tcp@free.pinggy.io > pinggy.log 2>&1 &
+          ssh -n -N -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -p 443 -R0:localhost:5900 tcp@free.pinggy.io > pinggy.log 2>&1 &
+          SSH_PID=$!
           
-          sleep 8
+          echo "Waiting for tunnel URL..."
+          for i in {1..15}; do
+            if grep -q "tcp://" pinggy.log 2>/dev/null; then
+              break
+            fi
+            sleep 1
+          done
           
           echo "--- PINGGY TUNNEL URL ---"
           cat pinggy.log
           echo "-------------------------"
           
-          echo "Tunnel is active! Holding job open..."
-          sleep 3600
+          while kill -0 $SSH_PID 2>/dev/null; do
+            sleep 5
+          done
