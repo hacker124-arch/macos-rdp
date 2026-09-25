@@ -35,7 +35,7 @@ jobs:
       - name: Start TCP Tunnel (Pinggy)
         run: |
           echo "Starting TCP tunnel on port 5900 via Pinggy..."
-          nohup ssh -o StrictHostKeyChecking=no -p 443 -R 0:localhost:5900 tcp@a.pinggy.io > pinggy.log 2>&1 &
+          nohup ssh -p 443 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -R 0:localhost:5900 tcp@free.pinggy.io > pinggy.log 2>&1 &
           
           echo "Waiting for tunnel URL..."
           sleep 6
@@ -47,5 +47,7 @@ jobs:
           echo "Job is active and running!"
           while true; do
             sleep 30
-            cat pinggy.log | grep -oE 'tcp://[a-zA-Z0-9.-]+:[0-9]+' || true
+            if grep -q "tcp://" pinggy.log; then
+              grep -oE 'tcp://[a-zA-Z0-9.-]+:[0-9]+' pinggy.log | tail -n 1
+            fi
           done
