@@ -49,7 +49,6 @@ jobs:
           cat pinggy.log
           echo "-------------------------"
 
-          # Keep the step alive by monitoring the SSH tunnel process
           while kill -0 $SSH_PID 2>/dev/null; do
             sleep 5
           done
