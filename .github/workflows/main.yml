@@ -1,4 +1,4 @@
-name: macOS Remote Desktop (LocalHost.run)
+name: macOS Remote Desktop (Pinggy)
 
 on:
   workflow_dispatch:
@@ -32,20 +32,20 @@ jobs:
 
           sudo nohup bash -c 'sleep 5; killall loginwindow' >/dev/null 2>&1 &
 
-      - name: Start TCP Tunnel (LocalHost.run)
+      - name: Start TCP Tunnel (Pinggy)
         run: |
-          echo "Starting TCP tunnel on port 5900 via LocalHost.run..."
-          nohup ssh -o StrictHostKeyChecking=no -R 5900:localhost:5900 tunnel.localhost.run > localhostrun.log 2>&1 &
+          echo "Starting TCP tunnel on port 5900 via Pinggy..."
+          nohup ssh -o StrictHostKeyChecking=no -p 443 -R 0:localhost:5900 tcp@a.pinggy.io > pinggy.log 2>&1 &
           
           echo "Waiting for tunnel URL..."
           sleep 6
           
           echo "=== YOUR CONNECTION URL ==="
-          cat localhostrun.log
+          cat pinggy.log
           echo "==========================="
           
           echo "Job is active and running!"
           while true; do
             sleep 30
-            cat localhostrun.log | grep -oE '[a-zA-Z0-9.-]+\.lhr\.life' || true
+            cat pinggy.log | grep -oE 'tcp://[a-zA-Z0-9.-]+:[0-9]+' || true
           done
