@@ -36,8 +36,8 @@ jobs:
         env:
           NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
         run: |
-          echo "Installing ngrok..."
-          brew install ngrok/core/ngrok
+          echo "Installing ngrok officially..."
+          curl -s https://ngrok-agent.s3.amazonaws.com/install.sh | sudo bash
           
           echo "Configuring auth token..."
           ngrok config add-authtoken $NGROK_AUTHTOKEN
