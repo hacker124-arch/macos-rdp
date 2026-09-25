@@ -1,4 +1,4 @@
-name: macOS Remote Desktop (ngrok)
+name: macOS Remote Desktop (Pinggy)
 
 on:
   workflow_dispatch:
@@ -32,25 +32,20 @@ jobs:
 
           sudo nohup bash -c 'sleep 5; killall loginwindow' >/dev/null 2>&1 &
 
-      - name: Start ngrok TCP Tunnel
-        env:
-          NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
+      - name: Start TCP Tunnel (Pinggy)
         run: |
-          echo "Downloading ngrok directly..."
-          curl -O https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-darwin-amd64.zip
-          unzip ngrok-v3-stable-darwin-amd64.zip
-          sudo mv ngrok /usr/local/bin/
-          
-          echo "Configuring auth token..."
-          ngrok config add-authtoken $NGROK_AUTHTOKEN
-          
-          echo "Starting TCP tunnel on port 5900..."
-          ngrok tcp 5900 --log=stdout &
+          echo "Starting TCP tunnel on port 5900 via Pinggy..."
+          nohup ssh -o StrictHostKeyChecking=no -p 443 -R 0:localhost:5900 tcp@a.pinggy.io > pinggy.log 2>&1 &
           
           echo "Waiting for tunnel URL..."
           sleep 6
           
+          echo "=== YOUR CONNECTION URL ==="
+          cat pinggy.log
+          echo "==========================="
+          
           echo "Job is active and running!"
           while true; do
             sleep 30
+            cat pinggy.log | grep -oE 'tcp://[a-zA-Z0-9.-]+:[0-9]+' || true
           done
