@@ -1,4 +1,4 @@
-name: macOS Remote Desktop
+name: macOS Remote Desktop (ngrok)
 
 on:
   workflow_dispatch:
@@ -32,6 +32,8 @@ jobs:
 
           sudo nohup bash -c 'sleep 5; killall loginwindow' >/dev/null 2>&1 &
 
-      - name: Start TCP Tunnel with Pinggy
-        run: |
-          ssh -tt -p 443 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -R0:localhost:5900 tcp@free.pinggy.io
+      - name: Start ngrok TCP Tunnel
+        uses: ngrok/ngrok-action@v1
+        with:
+          command: tcp 5900
+          auth-token: ${{ secrets.NGROK_AUTHTOKEN }}
