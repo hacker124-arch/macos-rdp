@@ -1,4 +1,4 @@
-name: macOS Remote Desktop (Pinggy)
+name: macOS Web Desktop (noVNC + ngrok)
 
 on:
   workflow_dispatch:
@@ -32,22 +32,37 @@ jobs:
 
           sudo nohup bash -c 'sleep 5; killall loginwindow' >/dev/null 2>&1 &
 
-      - name: Start TCP Tunnel (Pinggy)
+      - name: Start Web-Based RDP (noVNC + ngrok)
+        env:
+          NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
         run: |
-          echo "Starting TCP tunnel on port 5900 via Pinggy..."
-          nohup ssh -p 443 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -R 0:localhost:5900 tcp@free.pinggy.io > pinggy.log 2>&1 &
+          echo "Setting up noVNC..."
+          git clone https://github.com/novnc/noVNC.git
+          git clone https://github.com/novnc/websockify.git noVNC/utils/websockify
+          nohup ./noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 6080 > novnc.log 2>&1 &
+          
+          echo "Downloading ngrok..."
+          curl -O https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-darwin-amd64.zip
+          unzip ngrok-v3-stable-darwin-amd64.zip
+          sudo mv ngrok /usr/local/bin/
+          
+          echo "Configuring ngrok auth token..."
+          ngrok config add-authtoken $NGROK_AUTHTOKEN
+          
+          echo "Starting HTTP tunnel on port 6080..."
+          nohup ngrok http 6080 --log=stdout > ngrok.log 2>&1 &
           
           echo "Waiting for tunnel URL..."
-          sleep 6
+          sleep 10
           
-          echo "=== YOUR CONNECTION URL ==="
-          cat pinggy.log
-          echo "==========================="
+          echo "=========================================="
+          echo "🌐 YOUR WEB DESKTOP URL:"
+          curl -s http://localhost:4040/api/tunnels | grep -o '"public_url":"[^"]*"' | grep -o 'https://[^"]*'
+          echo "=========================================="
+          echo "1. Click the link above"
+          echo "2. Click 'Connect' on the webpage"
+          echo "3. Enter password: arham123"
           
-          echo "Job is active and running!"
           while true; do
             sleep 30
-            if grep -q "tcp://" pinggy.log; then
-              grep -oE 'tcp://[a-zA-Z0-9.-]+:[0-9]+' pinggy.log | tail -n 1
-            fi
           done
