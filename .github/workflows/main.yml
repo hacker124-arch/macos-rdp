@@ -36,8 +36,10 @@ jobs:
         env:
           NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
         run: |
-          echo "Installing ngrok officially..."
-          curl -s https://ngrok-agent.s3.amazonaws.com/install.sh | sudo bash
+          echo "Downloading ngrok directly..."
+          curl -O https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-darwin-amd64.zip
+          unzip ngrok-v3-stable-darwin-amd64.zip
+          sudo mv ngrok /usr/local/bin/
           
           echo "Configuring auth token..."
           ngrok config add-authtoken $NGROK_AUTHTOKEN
