@@ -1,24 +1,37 @@
-name: Windows Remote Desktop
+name: macOS Remote Desktop
 
 on:
   workflow_dispatch:
 
 jobs:
-  windows-rdp:
-    runs-on: windows-latest
+  macos-rdp:
+    runs-on: macos-latest
     timeout-minutes: 60
 
     steps:
-      - name: Enable RDP and Configure User
-        shell: pwsh
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Configure User and Enable Screen Sharing
         run: |
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
-          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-          net user runneradmin arham123 /add || true
-          net localgroup administrators runneradmin /add || true
+          sudo dscl . -create /Users/runneradmin UserShell /bin/bash || true
+          sudo dscl . -create /Users/runneradmin RealName "Runner Admin" || true
+          sudo dseditgroup -o edit -a runneradmin -t user admin || true
+          sudo dscl . -passwd /Users/runneradmin arham123 || true
+
+          sudo pmset -a sleep 0
+          sudo pmset -a displaysleep 0
+          sudo pmset -a disksleep 0
+
+          sudo mkdir -p /Library/Preferences
+          echo "arham123" | perl -we 'BEGIN { @k = unpack "C*", pack "H*", "1734516E8BA8C5E2FF1C39567390ADCA"}; $_ = <>; chomp; s/^(.{8})./$1/; @p = unpack "C*", $_; foreach (@k) { printf "%02X", $_ ^ (shift @p || 0) }; print "\n"' | sudo tee /Library/Preferences/com.apple.VNCSettings.txt
+          
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -users runneradmin -privs -all -restart -agent -privs -all
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -clientopts -setvnclegacy -vnclegacy yes
+          sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null || true
+
+          sudo nohup bash -c 'sleep 5; killall loginwindow' >/dev/null 2>&1 &
 
       - name: Start TCP Tunnel with Pinggy
-        shell: pwsh
         run: |
-          ssh -tt -p 443 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -R0:localhost:3389 tcp@free.pinggy.io
+          ssh -tt -p 443 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -R0:localhost:5900 tcp@free.pinggy.io
