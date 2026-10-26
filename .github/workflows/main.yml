@@ -12,6 +12,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Find the project folder
+        run: |
+          B="$(find . -name build.sh -not -path './.git/*' | head -n 1)"
+          if [ -z "$B" ]; then
+            echo "build.sh was not found in the repository. Files present:"
+            find . -not -path './.git/*' -type f | head -n 60
+            exit 1
+          fi
+          echo "PROJECT_DIR=$(cd "$(dirname "$B")" && pwd)" >> "$GITHUB_ENV"
+          echo "Found project in: $(dirname "$B")"
+
       - name: Free up disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
@@ -26,7 +37,9 @@ jobs:
             qemu-system-x86 ovmf
 
       - name: Build Quantum OS
-        run: bash build.sh
+        run: |
+          cd "$PROJECT_DIR"
+          bash build.sh
 
       - name: Upload ISO
         if: success()
@@ -34,12 +47,12 @@ jobs:
         with:
           name: quantum-os-iso
           path: |
-            out/*.iso
-            out/*.sha256
+            ${{ env.PROJECT_DIR }}/out/*.iso
+            ${{ env.PROJECT_DIR }}/out/*.sha256
 
       - name: Upload logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: build-logs
-          path: logs/
+          path: ${{ env.PROJECT_DIR }}/logs/
