@@ -1,66 +1,45 @@
-name: macOS Web Desktop (noVNC + ngrok)
+name: Build Quantum OS ISO
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:      # click "Run workflow" on the Actions tab
+  push:
+    branches: [main]
 
 jobs:
-  macos-rdp:
-    runs-on: macos-latest
-    timeout-minutes: 60
-
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Configure User and Enable Screen Sharing
+      - name: Free up disk space
         run: |
-          sudo dscl . -create /Users/runneradmin UserShell /bin/bash || true
-          sudo dscl . -create /Users/runneradmin RealName "Runner Admin" || true
-          sudo dseditgroup -o edit -a runneradmin -t user admin || true
-          sudo dscl . -passwd /Users/runneradmin arham123 || true
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
 
-          sudo pmset -a sleep 0
-          sudo pmset -a displaysleep 0
-          sudo pmset -a disksleep 0
-
-          sudo mkdir -p /Library/Preferences
-          echo "arham123" | perl -we 'BEGIN { @k = unpack "C*", pack "H*", "1734516E8BA8C5E2FF1C39567390ADCA"}; $_ = <>; chomp; s/^(.{8})./$1/; @p = unpack "C*", $_; foreach (@k) { printf "%02X", $_ ^ (shift @p || 0) }; print "\n"' | sudo tee /Library/Preferences/com.apple.VNCSettings.txt
-          
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -users runneradmin -privs -all -restart -agent -privs -all
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -clientopts -setvnclegacy -vnclegacy yes
-          sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null || true
-
-      - name: Start Web-Based RDP (noVNC + ngrok)
-        env:
-          NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
+      - name: Install build tools
         run: |
-          echo "Setting up noVNC..."
-          git clone https://github.com/novnc/noVNC.git
-          git clone https://github.com/novnc/websockify.git noVNC/utils/websockify
-          nohup ./noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 6080 > novnc.log 2>&1 &
-          
-          echo "Downloading ngrok..."
-          curl -O https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-darwin-amd64.zip
-          unzip ngrok-v3-stable-darwin-amd64.zip
-          sudo mv ngrok /usr/local/bin/
-          
-          echo "Configuring ngrok auth token..."
-          ngrok config add-authtoken $NGROK_AUTHTOKEN
-          
-          echo "Starting HTTP tunnel on port 6080..."
-          nohup ngrok http 6080 --log=stdout > ngrok.log 2>&1 &
-          
-          echo "Waiting for tunnel URL..."
-          sleep 10
-          
-          echo "=========================================="
-          echo "🌐 YOUR WEB DESKTOP URL:"
-          curl -s http://localhost:4040/api/tunnels | grep -o '"public_url":"[^"]*"' | grep -o 'https://[^"]*'
-          echo "=========================================="
-          echo "1. Click the link above"
-          echo "2. Click 'Connect' on the webpage"
-          echo "3. Enter password: arham123"
-          
-          while true; do
-            sleep 30
-          done
+          sudo apt-get update
+          sudo apt-get install -y build-essential bison flex gawk texinfo m4 patch perl python3 \
+            wget gnupg xz-utils bzip2 cpio rsync squashfs-tools xorriso mtools dosfstools \
+            grub-common grub-pc-bin grub-efi-amd64-bin bc libssl-dev libelf-dev dwarves \
+            qemu-system-x86 ovmf
+
+      - name: Build Quantum OS
+        run: bash build.sh
+
+      - name: Upload ISO
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quantum-os-iso
+          path: |
+            out/*.iso
+            out/*.sha256
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: logs/
