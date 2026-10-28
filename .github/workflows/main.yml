@@ -12,12 +12,25 @@ jobs:
         run: |
           PW="${VNC_PASSWORD:0:8}"
           echo "VNC password length used: ${#PW}"
+
+          # Wake the display and keep the Mac awake
+          nohup caffeinate -dimsu > /dev/null 2>&1 &
+          sudo pmset -a displaysleep 0 sleep 0 disksleep 0 || true
+
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
             -activate -configure -access -on \
             -clientopts -setvnclegacy -vnclegacy yes \
             -clientopts -setvncpw -vncpw "$PW" \
             -restart -agent -privs -all || true
           sudo sysadminctl -resetPasswordFor runner -newPassword "$PW" -adminUser runner -adminPassword - 2>&1 || true
+
+          echo "---- console user ----"
+          stat -f%Su /dev/console || true
+          echo "---- displays ----"
+          system_profiler SPDisplaysDataType | head -30 || true
+          echo "---- screen capture test ----"
+          screencapture -x /tmp/test.png && ls -l /tmp/test.png || echo "screencapture FAILED"
+
           sleep 5
           sudo lsof -iTCP:5900 -sTCP:LISTEN || echo "WARNING: VNC NOT LISTENING ON 5900"
 
