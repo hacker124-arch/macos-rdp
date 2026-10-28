@@ -1,58 +1,24 @@
-name: Build Quantum OS ISO
-
-on:
-  workflow_dispatch:      # click "Run workflow" on the Actions tab
-  push:
-    branches: [main]
-
+name: macos-vm
+on: workflow_dispatch
 jobs:
-  build:
-    runs-on: ubuntu-24.04
+  vm:
+    runs-on: macos-latest
     timeout-minutes: 360
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Find the project folder
+      - name: Enable VNC
         run: |
-          B="$(find . -name build.sh -not -path './.git/*' | head -n 1)"
-          if [ -z "$B" ]; then
-            echo "build.sh was not found in the repository. Files present:"
-            find . -not -path './.git/*' -type f | head -n 60
-            exit 1
-          fi
-          echo "PROJECT_DIR=$(cd "$(dirname "$B")" && pwd)" >> "$GITHUB_ENV"
-          echo "Found project in: $(dirname "$B")"
-
-      - name: Free up disk space
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+            -activate -configure -access -on \
+            -clientopts -setvnclegacy -vnclegacy yes \
+            -clientopts -setvncpw -vncpw "${{ secrets.VNC_PASSWORD }}" \
+            -restart -agent -privs -all
+          sudo dscl . -passwd /Users/runner "${{ secrets.VNC_PASSWORD }}"
+      - name: Start ngrok
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          df -h /
-
-      - name: Install build tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential bison flex gawk texinfo m4 patch perl python3 \
-            wget gnupg xz-utils bzip2 cpio rsync squashfs-tools xorriso mtools dosfstools \
-            grub-common grub-pc-bin grub-efi-amd64-bin bc libssl-dev libelf-dev dwarves \
-            qemu-system-x86 ovmf
-
-      - name: Build Quantum OS
-        run: |
-          cd "$PROJECT_DIR"
-          bash build.sh
-
-      - name: Upload ISO
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: quantum-os-iso
-          path: |
-            ${{ env.PROJECT_DIR }}/out/*.iso
-            ${{ env.PROJECT_DIR }}/out/*.sha256
-
-      - name: Upload logs on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-logs
-          path: ${{ env.PROJECT_DIR }}/logs/
+          brew install ngrok
+          ngrok config add-authtoken "${{ secrets.NGROK_TOKEN }}"
+          ngrok tcp 5900 --log=stdout > ngrok.log &
+          sleep 10
+          curl -s localhost:4040/api/tunnels | grep -o 'tcp://[^"]*'
+      - name: Keep alive
+        run: sleep 21000
