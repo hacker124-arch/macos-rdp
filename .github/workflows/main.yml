@@ -3,7 +3,7 @@ on: workflow_dispatch
 
 jobs:
   vm:
-    runs-on: macos-latest
+    runs-on: macos-15-intel
     timeout-minutes: 360
     env:
       VNC_PASSWORD: ${{ secrets.VNC_PASSWORD }}
@@ -13,7 +13,6 @@ jobs:
           PW="${VNC_PASSWORD:0:8}"
           echo "VNC password length used: ${#PW}"
 
-          # Wake the display and keep the Mac awake
           nohup caffeinate -dimsu > /dev/null 2>&1 &
           sudo pmset -a displaysleep 0 sleep 0 disksleep 0 || true
 
