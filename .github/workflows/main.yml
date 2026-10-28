@@ -3,7 +3,7 @@ on: workflow_dispatch
 
 jobs:
   vm:
-    runs-on: macos-15-intel
+    runs-on: macos-12-intel
     timeout-minutes: 360
     env:
       VNC_PASSWORD: ${{ secrets.VNC_PASSWORD }}
@@ -16,40 +16,43 @@ jobs:
           nohup caffeinate -dimsu > /dev/null 2>&1 &
           sudo pmset -a displaysleep 0 sleep 0 disksleep 0 || true
 
-          # Try to grant Screen Recording / Accessibility to the sharing agents
+          sudo dscl . -passwd /Users/runner "$PW" 2>&1 || echo "dscl passwd FAILED"
+          sudo defaults write /Library/Preferences/com.apple.loginwindow autoLoginUser runner || true
+
           TCC_DB="/Library/Application Support/com.apple.TCC/TCC.db"
-          for CLIENT in com.apple.screensharing.agent com.apple.RemoteDesktopAgent /usr/libexec/screensharingd; do
-            if [[ "$CLIENT" == /* ]]; then TYPE=1; else TYPE=0; fi
-            for SERVICE in kTCCServiceScreenCapture kTCCServiceAccessibility kTCCServicePostEvent; do
+          CLIENTS=(
+            "com.apple.screensharing.agent:0"
+            "com.apple.RemoteDesktopAgent:0"
+            "com.apple.ARDAgent:0"
+            "com.apple.screensharingd:0"
+            "/usr/libexec/screensharingd:1"
+            "/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/MacOS/ARDAgent:1"
+            "/System/Library/CoreServices/RemoteManagement/ARDAgent.app:1"
+          )
+          for ENTRY in "${CLIENTS[@]}"; do
+            CLIENT="${ENTRY%:*}"; TYPE="${ENTRY##*:}"
+            for SERVICE in kTCCServiceScreenCapture kTCCServiceAccessibility kTCCServicePostEvent kTCCServiceListenEvent; do
               sudo sqlite3 "$TCC_DB" "INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version) VALUES ('$SERVICE','$CLIENT',$TYPE,2,4,1);" 2>&1 \
                 && echo "TCC OK: $SERVICE $CLIENT" || echo "TCC FAILED: $SERVICE $CLIENT"
             done
           done
 
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -activate -configure -access -on \
+          KS=/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart
+          sudo $KS -activate -configure -allowAccessFor -allUsers -access -on \
             -clientopts -setvnclegacy -vnclegacy yes \
             -clientopts -setvncpw -vncpw "$PW" \
-            -restart -agent -privs -all || true
-
-          sudo killall screensharingd 2>/dev/null || true
+            -privs -all -restart -agent || true
           sleep 5
 
-          echo "---- console user ----"
-          stat -f%Su /dev/console || true
-          echo "---- screen capture test ----"
-          screencapture -x /tmp/test.png && ls -l /tmp/test.png || echo "screencapture FAILED"
-          sudo lsof -iTCP:5900 -sTCP:LISTEN || echo "WARNING: VNC NOT LISTENING ON 5900"
-
-      - name: Start bore tunnel
-        run: |
-          brew install bore-cli
-          nohup bore local 5900 --to bore.pub > bore.log 2>&1 &
-          sleep 8
-          echo "---- bore log ----"
-          cat bore.log
-          echo "---- CONNECT TIGHTVNC TO THIS ----"
-          grep -o 'bore.pub:[0-9]*' bore.log | head -1 || echo "No tunnel found, check log above"
-
-      - name: Keep alive
-        run: sleep 21000
+          # Watchdog: if VNC stops listening (e.g. after login), restart it
+          cat > /tmp/watchdog.sh <<EOF
+          #!/bin/bash
+          while true; do
+            if ! lsof -iTCP:5900 -sTCP:LISTEN >/dev/null 2>&1; then
+              $KS -activate -configure -access -on -clientopts -setvnclegacy -vnclegacy yes -clientopts -setvncpw -vncpw "$PW" -privs -all -restart -agent
+            fi
+            sleep 20
+          done
+          EOF
+          chmod +x /tmp/watchdog.sh
+          sudo nohup /tmp/watchdog.sh > /tmp/watchdog.log 2>&1 &
