@@ -44,15 +44,19 @@ jobs:
             -privs -all -restart -agent || true
           sleep 5
 
-          # Watchdog: if VNC stops listening (e.g. after login), restart it
-          cat > /tmp/watchdog.sh <<EOF
-          #!/bin/bash
-          while true; do
-            if ! lsof -iTCP:5900 -sTCP:LISTEN >/dev/null 2>&1; then
-              $KS -activate -configure -access -on -clientopts -setvnclegacy -vnclegacy yes -clientopts -setvncpw -vncpw "$PW" -privs -all -restart -agent
-            fi
-            sleep 20
-          done
-          EOF
-          chmod +x /tmp/watchdog.sh
-          sudo nohup /tmp/watchdog.sh > /tmp/watchdog.log 2>&1 &
+          echo "---- console user ----"
+          stat -f%Su /dev/console || true
+          sudo lsof -iTCP:5900 -sTCP:LISTEN || echo "WARNING: VNC NOT LISTENING ON 5900"
+
+      - name: Start bore tunnel
+        run: |
+          brew install bore-cli
+          nohup bore local 5900 --to bore.pub > bore.log 2>&1 &
+          sleep 8
+          echo "---- bore log ----"
+          cat bore.log
+          echo "---- CONNECT TIGHTVNC TO THIS ----"
+          grep -o 'bore.pub:[0-9]*' bore.log | head -1 || echo "No tunnel found, check log above"
+
+      - name: Keep alive
+        run: sleep 21000
