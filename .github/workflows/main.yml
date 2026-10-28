@@ -3,7 +3,7 @@ on: workflow_dispatch
 
 jobs:
   vm:
-    runs-on: macos-12-intel
+    runs-on: macos-15-intel
     timeout-minutes: 360
     env:
       VNC_PASSWORD: ${{ secrets.VNC_PASSWORD }}
