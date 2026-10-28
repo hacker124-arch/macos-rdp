@@ -8,7 +8,7 @@ jobs:
     env:
       VNC_PASSWORD: ${{ secrets.VNC_PASSWORD }}
     steps:
-      - name: Enable VNC
+      - name: Grant permissions and enable VNC
         run: |
           PW="${VNC_PASSWORD:0:8}"
           echo "VNC password length used: ${#PW}"
@@ -16,21 +16,29 @@ jobs:
           nohup caffeinate -dimsu > /dev/null 2>&1 &
           sudo pmset -a displaysleep 0 sleep 0 disksleep 0 || true
 
+          # Try to grant Screen Recording / Accessibility to the sharing agents
+          TCC_DB="/Library/Application Support/com.apple.TCC/TCC.db"
+          for CLIENT in com.apple.screensharing.agent com.apple.RemoteDesktopAgent /usr/libexec/screensharingd; do
+            if [[ "$CLIENT" == /* ]]; then TYPE=1; else TYPE=0; fi
+            for SERVICE in kTCCServiceScreenCapture kTCCServiceAccessibility kTCCServicePostEvent; do
+              sudo sqlite3 "$TCC_DB" "INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version) VALUES ('$SERVICE','$CLIENT',$TYPE,2,4,1);" 2>&1 \
+                && echo "TCC OK: $SERVICE $CLIENT" || echo "TCC FAILED: $SERVICE $CLIENT"
+            done
+          done
+
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
             -activate -configure -access -on \
             -clientopts -setvnclegacy -vnclegacy yes \
             -clientopts -setvncpw -vncpw "$PW" \
             -restart -agent -privs -all || true
-          sudo sysadminctl -resetPasswordFor runner -newPassword "$PW" -adminUser runner -adminPassword - 2>&1 || true
+
+          sudo killall screensharingd 2>/dev/null || true
+          sleep 5
 
           echo "---- console user ----"
           stat -f%Su /dev/console || true
-          echo "---- displays ----"
-          system_profiler SPDisplaysDataType | head -30 || true
           echo "---- screen capture test ----"
           screencapture -x /tmp/test.png && ls -l /tmp/test.png || echo "screencapture FAILED"
-
-          sleep 5
           sudo lsof -iTCP:5900 -sTCP:LISTEN || echo "WARNING: VNC NOT LISTENING ON 5900"
 
       - name: Start bore tunnel
