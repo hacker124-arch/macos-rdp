@@ -16,23 +16,29 @@ jobs:
             -clientopts -setvnclegacy -vnclegacy yes \
             -clientopts -setvncpw -vncpw "$VNC_PASSWORD" \
             -restart -agent -privs -all || true
-
-          # Try to set the runner user's password (may be rejected on newer images)
           sudo sysadminctl -resetPasswordFor runner -newPassword "$VNC_PASSWORD" -adminUser runner -adminPassword - 2>&1 || true
-
           sleep 5
           sudo lsof -iTCP:5900 -sTCP:LISTEN || echo "WARNING: VNC NOT LISTENING ON 5900"
 
-      - name: Start ngrok
+      - name: Start noVNC (web client)
+        run: |
+          git clone --depth 1 https://github.com/novnc/noVNC.git
+          python3 -m pip install websockify --break-system-packages
+          nohup python3 -m websockify --web noVNC 6080 localhost:5900 > novnc.log 2>&1 &
+          sleep 5
+          cat novnc.log
+
+      - name: Start ngrok (HTTP)
         run: |
           brew install ngrok
           ngrok config add-authtoken "$NGROK_TOKEN"
-          nohup ngrok tcp 5900 --log=stdout > ngrok.log 2>&1 &
+          nohup ngrok http 6080 --log=stdout > ngrok.log 2>&1 &
           sleep 10
           echo "---- ngrok log ----"
           cat ngrok.log
-          echo "---- CONNECT TO THIS ADDRESS ----"
-          curl -s localhost:4040/api/tunnels | grep -o 'tcp://[^"]*' || echo "No tunnel found, check log above"
+          echo "---- OPEN THIS IN YOUR BROWSER ----"
+          URL=$(curl -s localhost:4040/api/tunnels | grep -o 'https://[^"]*' | head -1)
+          echo "$URL/vnc.html"
 
       - name: Keep alive
         run: sleep 21000
