@@ -1,24 +1,38 @@
 name: macos-vm
 on: workflow_dispatch
+
 jobs:
   vm:
     runs-on: macos-latest
     timeout-minutes: 360
+    env:
+      VNC_PASSWORD: ${{ secrets.VNC_PASSWORD }}
+      NGROK_TOKEN: ${{ secrets.NGROK_TOKEN }}
     steps:
       - name: Enable VNC
         run: |
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
             -activate -configure -access -on \
             -clientopts -setvnclegacy -vnclegacy yes \
-            -clientopts -setvncpw -vncpw "${{ secrets.VNC_PASSWORD }}" \
-            -restart -agent -privs -all
-          sudo dscl . -passwd /Users/runner "${{ secrets.VNC_PASSWORD }}"
+            -clientopts -setvncpw -vncpw "$VNC_PASSWORD" \
+            -restart -agent -privs -all || true
+
+          # Try to set the runner user's password (may be rejected on newer images)
+          sudo sysadminctl -resetPasswordFor runner -newPassword "$VNC_PASSWORD" -adminUser runner -adminPassword - 2>&1 || true
+
+          sleep 5
+          sudo lsof -iTCP:5900 -sTCP:LISTEN || echo "WARNING: VNC NOT LISTENING ON 5900"
+
       - name: Start ngrok
         run: |
           brew install ngrok
-          ngrok config add-authtoken "${{ secrets.NGROK_TOKEN }}"
-          ngrok tcp 5900 --log=stdout > ngrok.log &
+          ngrok config add-authtoken "$NGROK_TOKEN"
+          nohup ngrok tcp 5900 --log=stdout > ngrok.log 2>&1 &
           sleep 10
-          curl -s localhost:4040/api/tunnels | grep -o 'tcp://[^"]*'
+          echo "---- ngrok log ----"
+          cat ngrok.log
+          echo "---- CONNECT TO THIS ADDRESS ----"
+          curl -s localhost:4040/api/tunnels | grep -o 'tcp://[^"]*' || echo "No tunnel found, check log above"
+
       - name: Keep alive
         run: sleep 21000
