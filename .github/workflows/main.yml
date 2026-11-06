@@ -12,11 +12,16 @@ jobs:
           set -e
           BASE=https://packages.termux.dev/apt/termux-main
           mkdir -p work/debs work/root out
-          curl -fsSL "$BASE/dists/stable/main/binary-aarch64/Packages" -o work/Packages
+          CURL="curl -fL --connect-timeout 20 --max-time 900 --retry 3 --retry-delay 5 --progress-bar"
+          echo "Fetching package index..."
+          $CURL "$BASE/dists/stable/main/binary-aarch64/Packages" -o work/Packages
+          ls -lh work/Packages
           for pkg in qemu-system-x86-64-headless qemu-system-aarch64-headless qemu-utils; do
             f=$(awk -v p="$pkg" '$1=="Package:"{cur=$2} $1=="Filename:" && cur==p {print $2; exit}' work/Packages)
             if [ -z "$f" ]; then echo "Package $pkg not found in index"; exit 1; fi
-            curl -fsSL "$BASE/$f" -o "work/debs/$pkg.deb"
+            echo "Downloading $pkg from $f"
+            $CURL "$BASE/$f" -o "work/debs/$pkg.deb"
+            ls -lh "work/debs/$pkg.deb"
           done
 
       - name: Extract packages
