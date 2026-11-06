@@ -1,62 +1,54 @@
-name: macos-vm
-on: workflow_dispatch
+name: Build QEMU engine
+
+on:
+  workflow_dispatch:
 
 jobs:
-  vm:
-    runs-on: macos-15-intel
-    timeout-minutes: 360
-    env:
-      VNC_PASSWORD: ${{ secrets.VNC_PASSWORD }}
+  engine:
+    runs-on: ubuntu-latest
     steps:
-      - name: Grant permissions and enable VNC
+      - name: Download Termux QEMU packages
         run: |
-          PW="${VNC_PASSWORD:0:8}"
-          echo "VNC password length used: ${#PW}"
-
-          nohup caffeinate -dimsu > /dev/null 2>&1 &
-          sudo pmset -a displaysleep 0 sleep 0 disksleep 0 || true
-
-          sudo dscl . -passwd /Users/runner "$PW" 2>&1 || echo "dscl passwd FAILED"
-          sudo defaults write /Library/Preferences/com.apple.loginwindow autoLoginUser runner || true
-
-          TCC_DB="/Library/Application Support/com.apple.TCC/TCC.db"
-          CLIENTS=(
-            "com.apple.screensharing.agent:0"
-            "com.apple.RemoteDesktopAgent:0"
-            "com.apple.ARDAgent:0"
-            "com.apple.screensharingd:0"
-            "/usr/libexec/screensharingd:1"
-            "/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/MacOS/ARDAgent:1"
-            "/System/Library/CoreServices/RemoteManagement/ARDAgent.app:1"
-          )
-          for ENTRY in "${CLIENTS[@]}"; do
-            CLIENT="${ENTRY%:*}"; TYPE="${ENTRY##*:}"
-            for SERVICE in kTCCServiceScreenCapture kTCCServiceAccessibility kTCCServicePostEvent kTCCServiceListenEvent; do
-              sudo sqlite3 "$TCC_DB" "INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version) VALUES ('$SERVICE','$CLIENT',$TYPE,2,4,1);" 2>&1 \
-                && echo "TCC OK: $SERVICE $CLIENT" || echo "TCC FAILED: $SERVICE $CLIENT"
-            done
+          set -e
+          BASE=https://packages.termux.dev/apt/termux-main
+          mkdir -p work/debs work/root out
+          curl -fsSL "$BASE/dists/stable/main/binary-aarch64/Packages" -o work/Packages
+          for pkg in qemu-system-x86-64-headless qemu-system-aarch64-headless qemu-utils; do
+            f=$(awk -v p="$pkg" '$1=="Package:"{cur=$2} $1=="Filename:" && cur==p {print $2; exit}' work/Packages)
+            if [ -z "$f" ]; then echo "Package $pkg not found in index"; exit 1; fi
+            curl -fsSL "$BASE/$f" -o "work/debs/$pkg.deb"
           done
 
-          KS=/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart
-          sudo $KS -activate -configure -allowAccessFor -allUsers -access -on \
-            -clientopts -setvnclegacy -vnclegacy yes \
-            -clientopts -setvncpw -vncpw "$PW" \
-            -privs -all -restart -agent || true
-          sleep 5
-
-          echo "---- console user ----"
-          stat -f%Su /dev/console || true
-          sudo lsof -iTCP:5900 -sTCP:LISTEN || echo "WARNING: VNC NOT LISTENING ON 5900"
-
-      - name: Start bore tunnel
+      - name: Extract packages
         run: |
-          brew install bore-cli
-          nohup bore local 5900 --to bore.pub > bore.log 2>&1 &
-          sleep 8
-          echo "---- bore log ----"
-          cat bore.log
-          echo "---- CONNECT TIGHTVNC TO THIS ----"
-          grep -o 'bore.pub:[0-9]*' bore.log | head -1 || echo "No tunnel found, check log above"
+          for d in work/debs/*.deb; do dpkg-deb -x "$d" work/root; done
+          find work/root -type f | head -50
 
-      - name: Keep alive
-        run: sleep 21000
+      - name: Collect binaries and firmware
+        run: |
+          set -e
+          B=work/root/data/data/com.termux/files/usr
+          cp "$B/bin/qemu-system-x86_64"  out/libqemu-system-x86_64.so
+          cp "$B/bin/qemu-system-aarch64" out/libqemu-system-aarch64.so
+          cp "$B/bin/qemu-img"            out/libqemu-img.so
+          chmod 755 out/*.so
+          mkdir -p out/firmware
+          cp -r "$B/share/qemu/." out/firmware/
+          (cd out/firmware && zip -qr ../qemu-firmware.zip .)
+
+      - name: Report missing shared libraries
+        run: |
+          B=work/root/data/data/com.termux/files/usr
+          for bin in out/*.so; do
+            echo "== $bin"
+            readelf -d "$bin" | grep NEEDED || true
+          done
+          echo "Libraries under $B/lib:"
+          ls "$B/lib" | grep '\.so' | head -100 || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qemu-engine
+          path: |
+            out/*.so
+            out/qemu-firmware.zip
