@@ -33,13 +33,23 @@ jobs:
         run: |
           set -e
           B=work/root/data/data/com.termux/files/usr
+          mkdir -p out/firmware
           cp "$B/bin/qemu-system-x86_64"  out/libqemu-system-x86_64.so
           cp "$B/bin/qemu-system-aarch64" out/libqemu-system-aarch64.so
           cp "$B/bin/qemu-img"            out/libqemu-img.so
           chmod 755 out/*.so
-          mkdir -p out/firmware
-          cp -r "$B/share/qemu/." out/firmware/
-          (cd out/firmware && zip -qr ../qemu-firmware.zip .)
+
+          # Firmware can sit in different folders depending on the package,
+          # so search for it instead of assuming one path.
+          FW=$(find work/root -type d -path '*share/qemu' | head -1)
+          if [ -n "$FW" ]; then
+            cp -r "$FW/." out/firmware/
+            echo "Firmware copied from $FW"
+          else
+            echo "WARNING: no share/qemu folder found; firmware not included"
+          fi
+          ls -lh out/firmware || true
+          (cd out/firmware && zip -qr ../qemu-firmware.zip .) || echo "No firmware to zip"
 
       - name: Report missing shared libraries
         run: |
