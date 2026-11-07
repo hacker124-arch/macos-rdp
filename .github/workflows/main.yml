@@ -263,6 +263,16 @@ jobs:
                       if real.is_file() and real.stat().st_size < 100 * 1024 * 1024:
                           shutil.copy2(real, ASSETDIR / p.name)
                           count += 1
+                  km = share / "keymaps"
+                  if km.is_dir():
+                      (ASSETDIR / "keymaps").mkdir()
+                      for kp in sorted(km.iterdir()):
+                          kreal = Path(os.path.realpath(kp))
+                          if kreal.is_file():
+                              shutil.copy2(kreal, ASSETDIR / "keymaps" / kp.name)
+                      print("Keymaps copied:", len(list((ASSETDIR / "keymaps").iterdir())))
+                  else:
+                      print("WARNING: no keymaps folder found in the Termux packages")
               print("Firmware files copied:", count)
 
               # final check on the OUTPUT: every NEEDED name must be bundled or provided by Android
@@ -967,19 +977,27 @@ jobs:
                       "qemu-img" to imgBinary(context).exists(),
                   )
 
-              /** Copies the firmware files (BIOS, VGA ROMs) from the qemu assets folder into filesDir/qemu once. */
+              /** Copies the firmware files (BIOS, VGA ROMs, keymaps) from the qemu assets folder into filesDir/qemu once. */
               fun prepareFirmware(context: Context): File {
                   val out = File(context.filesDir, "qemu")
-                  val marker = File(out, ".ready")
+                  val marker = File(out, ".ready-v2")
                   if (marker.exists()) return out
                   out.mkdirs()
-                  context.assets.list("qemu")?.forEach { name ->
-                      context.assets.open("qemu/$name").use { i ->
-                          File(out, name).outputStream().use { i.copyTo(it) }
-                      }
-                  }
+                  copyAssetTree(context, "qemu", out)
                   marker.writeText("1")
                   return out
+              }
+
+              private fun copyAssetTree(context: Context, assetPath: String, dest: File) {
+                  val children = context.assets.list(assetPath)
+                  if (children.isNullOrEmpty()) {
+                      // a plain file
+                      dest.parentFile?.mkdirs()
+                      context.assets.open(assetPath).use { i -> dest.outputStream().use { i.copyTo(it) } }
+                  } else {
+                      dest.mkdirs()
+                      children.forEach { copyAssetTree(context, "$assetPath/$it", File(dest, it)) }
+                  }
               }
 
               fun buildCommand(
@@ -1033,7 +1051,7 @@ jobs:
               fun start(context: Context, vm: VmConfig, repo: VmRepository) {
                   if (vm.id in processes) return
                   // Reserve the slot immediately so a double tap can't launch two copies.
-                  val session = if (vm.isServer) RemoteAccess.start(context, vm.id) else null
+                  val session = RemoteAccess.start(context, vm.id, local = !vm.isServer)
                   scope.launch {
                       try {
                           log(vm.id, "[Quantum VM] Starting ${vm.name}...")
@@ -1042,8 +1060,8 @@ jobs:
                               return@launch
                           }
                           createDisk(context, vm, repo)
-                          val cmd = buildCommand(context, vm, repo, prepareFirmware(context), session?.vncPort)
-                          if (session != null) log(vm.id, "[Quantum VM] Server gateway: ${session.url}")
+                          val cmd = buildCommand(context, vm, repo, prepareFirmware(context), session.vncPort)
+                          if (vm.isServer) log(vm.id, "[Quantum VM] Server address: ${session.url}")
                           log(vm.id, "$ " + cmd.joinToString(" "))
                           val pb = ProcessBuilder(cmd).redirectErrorStream(true)
                           // Bundled shared libraries sit next to the QEMU binaries.
@@ -1060,7 +1078,7 @@ jobs:
                       } catch (t: Throwable) {
                           log(vm.id, "[error] ${t.message}")
                       } finally {
-                          if (vm.isServer) RemoteAccess.stop(vm.id)
+                          RemoteAccess.stop(vm.id)
                           synchronized(processes) {
                               processes.remove(vm.id)
                               writers.remove(vm.id)
@@ -1121,10 +1139,12 @@ jobs:
 
           data class ServerSession(
               val url: String,
+              val localUrl: String,
               val username: String,
               val password: String,
               val httpPort: Int,
               val vncPort: Int,
+              val localToken: String,
           )
 
           /**
@@ -1150,20 +1170,24 @@ jobs:
                   (1..len).map { alphabet[rnd.nextInt(alphabet.length)] }.joinToString("")
 
               @Synchronized
-              fun start(context: Context, vmId: String): ServerSession {
+              fun start(context: Context, vmId: String, local: Boolean = false): ServerSession {
                   stop(vmId)
                   val vncPort = freePort(5901, 5999, loopbackOnly = true)
-                  val httpPort = freePort(8080, 8180, loopbackOnly = false)
+                  // Local VMs listen on loopback only; servers listen on the network.
+                  val httpPort = freePort(8080, 8180, loopbackOnly = local)
                   val user = "vm" + random(4, USER_ALPHABET)
                   val pass = random(12, PASS_ALPHABET)
 
-                  val gateway = Gateway(context.applicationContext, httpPort, user, pass, vncPort)
+                  val gateway = Gateway(context.applicationContext, httpPort, user, pass, vncPort, local)
                   gateway.start(0, true)
                   gateways[vmId] = gateway
 
+                  val host = if (local) "127.0.0.1" else (localIp() ?: "<phone-ip>")
                   val session = ServerSession(
-                      url = "http://${localIp() ?: "<phone-ip>"}:$httpPort",
+                      url = "http://$host:$httpPort",
+                      localUrl = "http://127.0.0.1:$httpPort",
                       username = user, password = pass, httpPort = httpPort, vncPort = vncPort,
+                      localToken = gateway.issueToken(),
                   )
                   _sessions.update { it + (vmId to session) }
                   return session
@@ -1210,7 +1234,8 @@ jobs:
                   private val username: String,
                   private val password: String,
                   private val vncPort: Int,
-              ) : NanoWSD(port) {
+                  loopbackOnly: Boolean,
+              ) : NanoWSD(if (loopbackOnly) "127.0.0.1" else null, port) {
 
                   private val tokens = HashSet<String>()
                   private val failures = HashMap<String, Pair<Int, Long>>() // ip -> (count, firstFailMillis)
@@ -1245,10 +1270,15 @@ jobs:
                           return redirect("/?e=1")
                       }
                       clearFailures(ip)
+                      val token = issueToken()
+                      return redirect("/viewer", "qvm=$token; Path=/; HttpOnly; SameSite=Strict")
+                  }
+
+                  fun issueToken(): String {
                       val bytes = ByteArray(24).also { rng.nextBytes(it) }
                       val token = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
                       synchronized(tokens) { tokens.add(token) }
-                      return redirect("/viewer", "qvm=$token; Path=/; HttpOnly; SameSite=Strict")
+                      return token
                   }
 
                   private fun isAuthed(session: IHTTPSession): Boolean {
@@ -1461,6 +1491,10 @@ jobs:
           import androidx.compose.material3.*
           import androidx.compose.runtime.*
           import androidx.compose.ui.Alignment
+          import androidx.compose.ui.viewinterop.AndroidView
+          import android.webkit.CookieManager
+          import android.webkit.WebView
+          import android.webkit.WebViewClient
           import androidx.compose.ui.Modifier
           import androidx.compose.ui.draw.clip
           import androidx.compose.ui.platform.LocalContext
@@ -1747,10 +1781,10 @@ jobs:
               val sessions by RemoteAccess.sessions.collectAsStateWithLifecycle()
               val session = sessions[vm.id]
               var showCreds by remember { mutableStateOf(false) }
-              LaunchedEffect(session?.password) { if (session != null) showCreds = true }
+              LaunchedEffect(session?.password) { if (session != null && vm.isServer) showCreds = true }
               val engineOk = remember { QemuEngine.isEngineAvailable(context, vm) }
 
-              if (showCreds && session != null) ConnectionDialog(session) { showCreds = false }
+              if (showCreds && session != null && vm.isServer) ConnectionDialog(session) { showCreds = false }
 
               LaunchedEffect(lines.size) { if (lines.isNotEmpty()) listState.animateScrollToItem(lines.lastIndex) }
 
@@ -1801,7 +1835,7 @@ jobs:
                               )
                           }
                       }
-                      if (session != null) {
+                      if (session != null && vm.isServer) {
                           OutlinedButton(onClick = { showCreds = true }, modifier = Modifier.fillMaxWidth()) {
                               Icon(Icons.Default.Link, null); Spacer(Modifier.width(8.dp))
                               Text("Show URL and login")
@@ -1821,6 +1855,12 @@ jobs:
                               modifier = Modifier.weight(1f),
                           ) { Icon(Icons.Default.Stop, null); Spacer(Modifier.width(6.dp)); Text("Stop") }
                           OutlinedButton(onClick = { QemuEngine.clearLog(vm.id) }) { Text("Clear") }
+                      }
+
+                      // Screen of the running VM
+                      // Servers show their screen on the web page only; local VMs show it here.
+                      if (session != null && isRunning && !vm.isServer) {
+                          key(session.localUrl, session.localToken) { LocalDisplay(session) }
                       }
 
                       // Serial console
@@ -1985,6 +2025,30 @@ jobs:
                   IconButton(onClick = onCopy) { Icon(Icons.Default.ContentCopy, "Copy $label", tint = QColors.Primary) }
               }
           }
+
+
+          // ---------------------------------------------------------------- Display
+
+          @Composable
+          private fun LocalDisplay(session: ServerSession) {
+              AndroidView(
+                  modifier = Modifier.fillMaxWidth().height(260.dp).clip(RoundedCornerShape(14.dp)),
+                  factory = { ctx ->
+                      WebView(ctx).apply {
+                          settings.javaScriptEnabled = true
+                          settings.domStorageEnabled = true
+                          webViewClient = WebViewClient()
+                          // Log the WebView in with the token issued for this run (no typed password needed).
+                          CookieManager.getInstance().apply {
+                              setAcceptCookie(true)
+                              setCookie(session.localUrl, "qvm=${session.localToken}; Path=/")
+                              flush()
+                          }
+                          loadUrl("${session.localUrl}/viewer")
+                      }
+                  },
+              )
+          }
           QVM_EOF
           mkdir -p app/src/main/java/com/quantumvm/app/ui
           cat > app/src/main/java/com/quantumvm/app/ui/Theme.kt <<'QVM_EOF'
@@ -2037,7 +2101,7 @@ jobs:
         run: |
           mkdir -p app/src/main/jniLibs/arm64-v8a app/src/main/assets/qemu
           cp "$GITHUB_WORKSPACE"/engine-out/jniLibs/arm64-v8a/* app/src/main/jniLibs/arm64-v8a/
-          cp "$GITHUB_WORKSPACE"/engine-out/assets/qemu/* app/src/main/assets/qemu/ || true
+          cp -r "$GITHUB_WORKSPACE"/engine-out/assets/qemu/* app/src/main/assets/qemu/ || true
           echo "org.gradle.jvmargs=-Xmx4g -Dfile.encoding=UTF-8" >> gradle.properties
 
       - uses: actions/setup-java@v4
