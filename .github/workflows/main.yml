@@ -427,6 +427,7 @@ jobs:
               <application
                   android:allowBackup="false"
                   android:extractNativeLibs="true"
+                  android:usesCleartextTraffic="true"
                   android:icon="@mipmap/ic_launcher"
                   android:label="@string/app_name"
                   android:theme="@style/Theme.QuantumVM">
@@ -845,6 +846,9 @@ jobs:
               val isoPath: String? = null,
               /** Server VMs get a web gateway (URL + generated credentials) for remote access. */
               val isServer: Boolean = false,
+              /** Login chosen by the user for a server. Null for local VMs. */
+              val serverUser: String? = null,
+              val serverPassword: String? = null,
           ) {
               fun toJson(): String = JSONObject().apply {
                   put("id", id)
@@ -855,6 +859,8 @@ jobs:
                   put("diskGb", diskGb)
                   put("isoPath", isoPath ?: JSONObject.NULL)
                   put("isServer", isServer)
+                  put("serverUser", serverUser ?: JSONObject.NULL)
+                  put("serverPassword", serverPassword ?: JSONObject.NULL)
               }.toString(2)
 
               companion object {
@@ -869,6 +875,8 @@ jobs:
                           diskGb = o.optInt("diskGb", 16),
                           isoPath = if (o.isNull("isoPath")) null else o.getString("isoPath"),
                           isServer = o.optBoolean("isServer", false),
+                          serverUser = if (o.isNull("serverUser")) null else o.getString("serverUser"),
+                          serverPassword = if (o.isNull("serverPassword")) null else o.getString("serverPassword"),
                       )
                   }
               }
@@ -1051,7 +1059,10 @@ jobs:
               fun start(context: Context, vm: VmConfig, repo: VmRepository) {
                   if (vm.id in processes) return
                   // Reserve the slot immediately so a double tap can't launch two copies.
-                  val session = RemoteAccess.start(context, vm.id, local = !vm.isServer)
+                  val session = RemoteAccess.start(
+                      context, vm.id, local = !vm.isServer,
+                      username = vm.serverUser, password = vm.serverPassword,
+                  )
                   scope.launch {
                       try {
                           log(vm.id, "[Quantum VM] Starting ${vm.name}...")
@@ -1170,13 +1181,17 @@ jobs:
                   (1..len).map { alphabet[rnd.nextInt(alphabet.length)] }.joinToString("")
 
               @Synchronized
-              fun start(context: Context, vmId: String, local: Boolean = false): ServerSession {
+              fun start(
+                  context: Context, vmId: String, local: Boolean = false,
+                  username: String? = null, password: String? = null,
+              ): ServerSession {
                   stop(vmId)
                   val vncPort = freePort(5901, 5999, loopbackOnly = true)
                   // Local VMs listen on loopback only; servers listen on the network.
                   val httpPort = freePort(8080, 8180, loopbackOnly = local)
-                  val user = "vm" + random(4, USER_ALPHABET)
-                  val pass = random(12, PASS_ALPHABET)
+                  // Use the login the user chose; generate one only if none was set.
+                  val user = username?.takeIf { it.isNotBlank() } ?: ("vm" + random(4, USER_ALPHABET))
+                  val pass = password?.takeIf { it.isNotBlank() } ?: random(12, PASS_ALPHABET)
 
                   val gateway = Gateway(context.applicationContext, httpPort, user, pass, vncPort, local)
                   gateway.start(0, true)
@@ -1676,6 +1691,9 @@ jobs:
               var isoUri by remember { mutableStateOf<Uri?>(null) }
               var isoName by remember { mutableStateOf<String?>(null) }
               var saving by remember { mutableStateOf(false) }
+              var srvUser by remember { mutableStateOf("") }
+              var srvPass by remember { mutableStateOf("") }
+              val loginOk = !server || (srvUser.trim().length >= 3 && srvPass.length >= 6)
 
               val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
                   if (uri != null) { isoUri = uri; isoName = repo.displayName(uri) }
@@ -1706,6 +1724,20 @@ jobs:
                           label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
                       )
 
+                      if (server) {
+                          OutlinedTextField(
+                              value = srvUser, onValueChange = { srvUser = it.filter { c -> !c.isWhitespace() } },
+                              label = { Text("Server username (3+ characters)") }, singleLine = true,
+                              modifier = Modifier.fillMaxWidth(),
+                          )
+                          OutlinedTextField(
+                              value = srvPass, onValueChange = { srvPass = it },
+                              label = { Text("Server password (6+ characters)") }, singleLine = true,
+                              visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                              modifier = Modifier.fillMaxWidth(),
+                          )
+                      }
+
                       Text("Guest architecture", color = QColors.Muted)
                       Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                           GuestArch.entries.forEach {
@@ -1729,14 +1761,19 @@ jobs:
                       }
 
                       Button(
-                          enabled = name.isNotBlank() && !saving,
+                          enabled = name.isNotBlank() && !saving && loginOk,
                           onClick = {
                               saving = true
                               scope.launch(kotlinx.coroutines.Dispatchers.IO) {
                                   val id = repo.newId()
                                   val iso = isoUri?.let { repo.importIso(id, it) }
                                   repo.save(
-                                      VmConfig(id, name.trim(), arch, cpus.toInt(), ramMb.toInt(), diskGb.toInt(), iso, isServer = server)
+                                      VmConfig(
+                                          id, name.trim(), arch, cpus.toInt(), ramMb.toInt(), diskGb.toInt(), iso,
+                                          isServer = server,
+                                          serverUser = if (server) srvUser.trim() else null,
+                                          serverPassword = if (server) srvPass else null,
+                                      )
                                   )
                                   kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { onDone() }
                               }
@@ -2001,12 +2038,12 @@ jobs:
                   title = { Text("Server is starting") },
                   text = {
                       Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                          Text("Open this address on your other device, then enter the login below.", color = QColors.Muted)
+                          Text("Open this address on your other device, then enter the username and password you chose.", color = QColors.Muted)
                           CredRow("URL", session.url) { copy(session.url) }
                           CredRow("Username", session.username) { copy(session.username) }
                           CredRow("Password", session.password) { copy(session.password) }
                           Text(
-                              "Both devices must be on the same network. The login changes every time the server starts.",
+                              "Both devices must be on the same network.",
                               color = QColors.Muted, fontSize = 12.sp,
                           )
                       }
