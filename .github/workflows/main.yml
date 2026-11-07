@@ -1,175 +1,111 @@
-name: Build whpx_hello.exe (Windows)
+name: Build Quantum VM firmware (UEFI with our logo)
 
-# Builds the Windows test program. The source file is inside this workflow,
-# so this single file is all you need in the repo.
-# Run it from Actions -> Build whpx_hello.exe -> Run workflow.
-# Download the "whpx_hello" artifact, then run whpx_hello.exe on a Windows PC
-# that has "Windows Hypervisor Platform" turned on.
+# Builds open-source UEFI firmware (EDK2 / OVMF) with the Quantum VM logo on the
+# boot splash screen. Run it from Actions -> Build Quantum VM firmware -> Run workflow.
+# Download the "quantumvm-firmware" artifact: OVMF_CODE.fd and OVMF_VARS.fd.
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main, master]
 
 jobs:
-  build:
-    name: Compile whpx_hello.exe
-    runs-on: windows-2022
+  firmware:
+    name: Build UEFI firmware
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
     steps:
-      - name: Write the source file
-        shell: pwsh
+      - name: Install build tools
         run: |
-          @'
-          // whpx_hello.cpp
-          // Milestone 1 for Quantum VM: create a VM with Windows Hypervisor Platform (WHPX),
-          // run a tiny guest program that prints a message to a serial port, then halt.
-          //
-          // Requirements:
-          //   - Windows 10/11 with "Windows Hypervisor Platform" turned on (Windows Features)
-          //   - Virtualization enabled in BIOS/UEFI
-          //   - Visual Studio 2022 with the C++ workload
-          //
-          // Build (open "x64 Native Tools Command Prompt for VS 2022"):
-          //   cl /EHsc /std:c++17 whpx_hello.cpp WinHvPlatform.lib
-          // Run:
-          //   whpx_hello.exe
+          sudo apt-get update
+          sudo apt-get install -y build-essential uuid-dev nasm acpica-tools \
+            python3 git librsvg2-bin imagemagick
 
-          #include <windows.h>
-          #include <WinHvPlatform.h>
+      - name: Get EDK2 (stable release)
+        run: |
+          git clone --depth 1 --branch edk2-stable202411 --recurse-submodules --shallow-submodules \
+            https://github.com/tianocore/edk2.git edk2
+          cd edk2 && git log -1 --oneline
 
-          #include <cstdint>
-          #include <cstdio>
-          #include <cstring>
-          #include <vector>
+      - name: Write the Quantum VM logo
+        run: |
+          cat > quantum_vm_logo.svg <<'QVM_SVG'
+            <?xml version="1.0" encoding="UTF-8"?>
+            <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+              <defs>
+                <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0" stop-color="#2A1850"/>
+                  <stop offset="1" stop-color="#120A1F"/>
+                </linearGradient>
+                <linearGradient id="chip" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0" stop-color="#C9A7FF"/>
+                  <stop offset="1" stop-color="#9B5CFF"/>
+                </linearGradient>
+                <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+                  <stop offset="0" stop-color="#9B5CFF" stop-opacity="0.55"/>
+                  <stop offset="1" stop-color="#9B5CFF" stop-opacity="0"/>
+                </radialGradient>
+              </defs>
 
-          #define CHECK(hr, what)                                                    \
-              do {                                                                   \
-                  HRESULT _h = (hr);                                                 \
-                  if (FAILED(_h)) {                                                  \
-                      std::printf("%s failed: 0x%08lX\n", what, (unsigned long)_h); \
-                      return 1;                                                      \
-                  }                                                                  \
-              } while (0)
+              <!-- Rounded app background -->
+              <rect x="32" y="32" width="960" height="960" rx="220" fill="url(#bg)"/>
 
-          int main() {
-              const UINT64 MEM_SIZE = 1024 * 1024;  // 1 MB of guest RAM, mapped at guest address 0
-              const UINT64 GUEST_ENTRY = 0x1000;    // where the guest program is placed and starts
+              <!-- Soft glow behind the chip -->
+              <circle cx="512" cy="512" r="380" fill="url(#glow)"/>
 
-              // 1. Create the partition (the VM) with one virtual CPU.
-              WHV_PARTITION_HANDLE part = nullptr;
-              CHECK(WHvCreatePartition(&part), "WHvCreatePartition");
+              <!-- Chip pins (top, bottom, left, right) -->
+              <g stroke="#C9A7FF" stroke-width="28" stroke-linecap="round" opacity="0.9">
+                <line x1="400" y1="150" x2="400" y2="250"/>
+                <line x1="512" y1="150" x2="512" y2="250"/>
+                <line x1="624" y1="150" x2="624" y2="250"/>
+                <line x1="400" y1="774" x2="400" y2="874"/>
+                <line x1="512" y1="774" x2="512" y2="874"/>
+                <line x1="624" y1="774" x2="624" y2="874"/>
+                <line x1="150" y1="400" x2="250" y2="400"/>
+                <line x1="150" y1="512" x2="250" y2="512"/>
+                <line x1="150" y1="624" x2="250" y2="624"/>
+                <line x1="774" y1="400" x2="874" y2="400"/>
+                <line x1="774" y1="512" x2="874" y2="512"/>
+                <line x1="774" y1="624" x2="874" y2="624"/>
+              </g>
 
-              UINT32 cpus = 1;
-              CHECK(WHvSetPartitionProperty(part, WHvPartitionPropertyCodeProcessorCount,
-                                            &cpus, sizeof(cpus)),
-                    "WHvSetPartitionProperty");
-              CHECK(WHvSetupPartition(part), "WHvSetupPartition");
+              <!-- Chip body -->
+              <rect x="250" y="250" width="524" height="524" rx="88" fill="#1B0F33" stroke="url(#chip)" stroke-width="30"/>
 
-              // 2. Give the VM its RAM.
-              void* ram = VirtualAlloc(nullptr, MEM_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-              if (!ram) {
-                  std::printf("VirtualAlloc failed\n");
-                  return 1;
-              }
-              CHECK(WHvMapGpaRange(part, ram, 0, MEM_SIZE,
-                                   WHvMapGpaRangeFlagRead | WHvMapGpaRangeFlagWrite |
-                                       WHvMapGpaRangeFlagExecute),
-                    "WHvMapGpaRange");
+              <!-- Inner core: a "Q" ring with a tail -->
+              <circle cx="500" cy="490" r="130" fill="none" stroke="url(#chip)" stroke-width="54"/>
+              <line x1="570" y1="560" x2="650" y2="640" stroke="url(#chip)" stroke-width="54" stroke-linecap="round"/>
 
-              // 3. The guest program (16-bit real-mode machine code):
-              //    mov dx, 0x3F8         ; COM1 serial port
-              //    for each character:
-              //        mov al, char      ; B0 ib
-              //        out dx, al        ; EE
-              //    hlt                   ; F4
-              std::vector<uint8_t> code = {0xBA, 0xF8, 0x03};
-              for (const char* p = "Hello from Quantum VM!\r\n"; *p; ++p) {
-                  code.push_back(0xB0);
-                  code.push_back(static_cast<uint8_t>(*p));
-                  code.push_back(0xEE);
-              }
-              code.push_back(0xF4);
-              std::memcpy(static_cast<uint8_t*>(ram) + GUEST_ENTRY, code.data(), code.size());
+              <!-- Power dot -->
+              <circle cx="650" cy="650" r="0" fill="#6EE7A8"/>
+            </svg>
+          QVM_SVG
 
-              // 4. Create the virtual CPU and set it to start in real mode at GUEST_ENTRY.
-              CHECK(WHvCreateVirtualProcessor(part, 0, 0), "WHvCreateVirtualProcessor");
+      - name: Replace the boot splash logo
+        run: |
+          set -e
+          LOGO_DIR=edk2/MdeModulePkg/Logo
+          test -d "$LOGO_DIR" || { echo "Logo folder not found in EDK2"; ls edk2/MdeModulePkg; exit 1; }
+          # 200x200 image on the same dark background as the app
+          rsvg-convert -w 200 -h 200 quantum_vm_logo.svg -o logo.png
+          convert logo.png -background '#120A1F' -flatten -type TrueColor BMP3:"$LOGO_DIR/Logo.bmp"
+          file "$LOGO_DIR/Logo.bmp"
 
-              auto segment = [](UINT16 selector, UINT16 attributes) {
-                  WHV_X64_SEGMENT_REGISTER s = {};
-                  s.Base = 0;
-                  s.Limit = 0xFFFF;
-                  s.Selector = selector;
-                  s.Attributes = attributes;
-                  return s;
-              };
+      - name: Build OVMF (x64 UEFI firmware)
+        working-directory: edk2
+        run: |
+          set -e
+          source edksetup.sh
+          make -C BaseTools -j"$(nproc)"
+          build -a X64 -t GCC5 -b RELEASE -p OvmfPkg/OvmfPkgX64.dsc -n "$(nproc)"
 
-              WHV_REGISTER_NAME names[] = {
-                  WHvX64RegisterCs, WHvX64RegisterDs, WHvX64RegisterEs, WHvX64RegisterSs,
-                  WHvX64RegisterCr0, WHvX64RegisterRflags, WHvX64RegisterRip,
-              };
-              WHV_REGISTER_VALUE values[7] = {};
-              values[0].Segment = segment(0, 0x9B);  // CS: code segment
-              values[1].Segment = segment(0, 0x93);  // DS: data segment
-              values[2].Segment = segment(0, 0x93);  // ES
-              values[3].Segment = segment(0, 0x93);  // SS
-              values[4].Reg64 = 0x10;                // CR0: real mode (protected mode bit off)
-              values[5].Reg64 = 0x2;                 // RFLAGS: bit 1 must always be set
-              values[6].Reg64 = GUEST_ENTRY;         // RIP: first instruction to run
-
-              CHECK(WHvSetVirtualProcessorRegisters(part, 0, names, 7, values),
-                    "WHvSetVirtualProcessorRegisters");
-
-              // 5. Run the CPU. Each time the guest writes to the serial port, print the byte.
-              //    Stop when the guest halts.
-              std::printf("Starting VM...\n");
-              for (;;) {
-                  WHV_RUN_VP_EXIT_CONTEXT exit = {};
-                  CHECK(WHvRunVirtualProcessor(part, 0, &exit, sizeof(exit)),
-                        "WHvRunVirtualProcessor");
-
-                  if (exit.ExitReason == WHvRunVpExitReasonX64IoPortAccess) {
-                      const auto& io = exit.IoPortAccess;
-                      if (io.PortNumber == 0x3F8 && io.AccessInfo.IsWrite) {
-                          std::putchar(static_cast<int>(io.Rax & 0xFF));
-                      }
-
-                      // Skip past the OUT instruction. Otherwise the CPU would run it again.
-                      WHV_REGISTER_NAME rip = WHvX64RegisterRip;
-                      WHV_REGISTER_VALUE next = {};
-                      next.Reg64 = exit.VpContext.Rip + exit.VpContext.InstructionLength;
-                      CHECK(WHvSetVirtualProcessorRegisters(part, 0, &rip, 1, &next),
-                            "advance RIP");
-                  } else if (exit.ExitReason == WHvRunVpExitReasonX64Halt) {
-                      std::printf("[guest halted]\n");
-                      break;
-                  } else {
-                      std::printf("Unexpected VM exit, reason %d\n", (int)exit.ExitReason);
-                      break;
-                  }
-              }
-
-              // 6. Clean up.
-              WHvDeletePartition(part);
-              VirtualFree(ram, 0, MEM_RELEASE);
-              return 0;
-          }
-          '@ | Set-Content -Encoding ascii whpx_hello.cpp
-
-      - name: Set up the Visual C++ compiler
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
-
-      - name: Compile
-        shell: cmd
-        run: cl /EHsc /std:c++17 whpx_hello.cpp WinHvPlatform.lib /Fe:whpx_hello.exe
-
-      - name: Show the file
-        shell: pwsh
-        run: Get-Item whpx_hello.exe | Format-List Name, Length
+      - name: Collect the firmware files
+        run: |
+          mkdir -p firmware-out
+          FV=edk2/Build/OvmfX64/RELEASE_GCC5/FV
+          cp "$FV/OVMF_CODE.fd" "$FV/OVMF_VARS.fd" firmware-out/
+          ls -la firmware-out
 
       - uses: actions/upload-artifact@v4
         with:
-          name: whpx_hello
-          path: whpx_hello.exe
+          name: quantumvm-firmware
+          path: firmware-out
           if-no-files-found: error
