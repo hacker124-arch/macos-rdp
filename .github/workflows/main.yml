@@ -967,7 +967,7 @@ jobs:
                       "qemu-img" to imgBinary(context).exists(),
                   )
 
-              /** Copies assets/qemu/* (BIOS, VGA ROMs, keymaps) into filesDir/qemu once. */
+              /** Copies the firmware files (BIOS, VGA ROMs) from the qemu assets folder into filesDir/qemu once. */
               fun prepareFirmware(context: Context): File {
                   val out = File(context.filesDir, "qemu")
                   val marker = File(out, ".ready")
