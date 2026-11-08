@@ -379,6 +379,7 @@ jobs:
           static int RunLoop(WHV_PARTITION_HANDLE part, const uint8_t* ram, Devices& dev) {
               std::set<UINT16> unknownPorts;
               std::set<UINT32> unknownMsrs;
+              std::set<UINT64> seenRips;
               UINT16 fwSelector = 0;
               UINT32 fwOffset = 0;
               std::vector<uint8_t> fwItem = FwCfgItem(0);
@@ -473,6 +474,11 @@ jobs:
                   } else if (exit.ExitReason == WHvRunVpExitReasonCanceled) {
                       // Heartbeat pause: show where the firmware is, then keep running.
                       LOG("[heartbeat] RIP 0x%llX\n", (unsigned long long)exit.VpContext.Rip);
+                      // The first time we see a new address, print the instructions and registers there.
+                      if (seenRips.insert(exit.VpContext.Rip).second) {
+                          DumpBytes(ram, exit.VpContext.Rip);
+                          DumpRegisters(part, ram);
+                      }
 
                   } else if (exit.ExitReason == WHvRunVpExitReasonX64MsrAccess) {
                       // The firmware reads or writes an MSR we do not emulate (for example IA32_PLATFORM_ID, 0x17).
