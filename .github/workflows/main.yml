@@ -383,6 +383,24 @@ jobs:
               UINT32 fwOffset = 0;
               std::vector<uint8_t> fwItem = FwCfgItem(0);
               LOG("Starting firmware...\n");
+
+              // Heartbeat: every 2 seconds the CPU is paused, so we can log where the firmware is, then it resumes.
+              std::atomic<bool> heartbeatOn(true);
+              std::thread heartbeat([&]() {
+                  while (heartbeatOn.load()) {
+                      std::this_thread::sleep_for(std::chrono::seconds(2));
+                      if (heartbeatOn.load()) WHvCancelRunVirtualProcessor(part, 0, 0);
+                  }
+              });
+              struct HeartbeatStopper {
+                  std::atomic<bool>& flag;
+                  std::thread& thread;
+                  ~HeartbeatStopper() {
+                      flag = false;
+                      if (thread.joinable()) thread.join();
+                  }
+              } stopper{heartbeatOn, heartbeat};
+
               for (;;) {
                   WHV_RUN_VP_EXIT_CONTEXT exit = {};
                   CHECK(WHvRunVirtualProcessor(part, 0, &exit, sizeof(exit)), "WHvRunVirtualProcessor");
@@ -451,6 +469,10 @@ jobs:
                       CHECK(SetReg64(part, WHvX64RegisterRip,
                                      exit.VpContext.Rip + exit.VpContext.InstructionLength),
                             "advance RIP");
+
+                  } else if (exit.ExitReason == WHvRunVpExitReasonCanceled) {
+                      // Heartbeat pause: show where the firmware is, then keep running.
+                      LOG("[heartbeat] RIP 0x%llX\n", (unsigned long long)exit.VpContext.Rip);
 
                   } else if (exit.ExitReason == WHvRunVpExitReasonX64MsrAccess) {
                       // The firmware reads or writes an MSR we do not emulate (for example IA32_PLATFORM_ID, 0x17).
