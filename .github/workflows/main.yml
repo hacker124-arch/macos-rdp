@@ -268,8 +268,45 @@ jobs:
               return 0;
           }
 
+          // Reads 8 bytes of guest RAM at a physical address.
+          static UINT64 ReadGuest64(const uint8_t* ram, UINT64 phys, bool& ok) {
+              if (phys + 8 > RAM_SIZE) {
+                  ok = false;
+                  return 0;
+              }
+              UINT64 v = 0;
+              std::memcpy(&v, ram + phys, 8);
+              ok = true;
+              return v;
+          }
+
+          // Walks the guest page tables for one virtual address and prints each entry.
+          static void DumpPaging(const uint8_t* ram, UINT64 cr3, UINT64 va) {
+              static const int shifts[4] = {39, 30, 21, 12};
+              static const char* names[4] = {"PML4", "PDPT", "PD", "PT"};
+              UINT64 table = cr3 & 0x000FFFFFFFFFF000ULL;
+              for (int level = 0; level < 4; ++level) {
+                  const UINT64 index = (va >> shifts[level]) & 0x1FF;
+                  bool ok = false;
+                  const UINT64 entry = ReadGuest64(ram, table + index * 8, ok);
+                  if (!ok) {
+                      LOG("[paging] %s table at 0x%llX is outside guest RAM\n", names[level], (unsigned long long)table);
+                      return;
+                  }
+                  LOG("[paging] %s[%llu] = 0x%llX%s\n", names[level], (unsigned long long)index,
+                      (unsigned long long)entry, (entry & 1) ? "" : " (not present)");
+                  if (!(entry & 1))
+                      return;
+                  if ((level == 1 || level == 2) && (entry & 0x80)) {
+                      LOG("[paging] large page\n");
+                      return;
+                  }
+                  table = entry & 0x000FFFFFFFFFF000ULL;
+              }
+          }
+
           // Prints the main registers, so we can see what the code at RIP was doing.
-          static void DumpRegisters(WHV_PARTITION_HANDLE part) {
+          static void DumpRegisters(WHV_PARTITION_HANDLE part, const uint8_t* ram) {
               const WHV_REGISTER_NAME names[] = {
                   WHvX64RegisterRax, WHvX64RegisterRcx, WHvX64RegisterRsi, WHvX64RegisterRdi,
                   WHvX64RegisterRsp, WHvX64RegisterCr0, WHvX64RegisterCr3, WHvX64RegisterCr4,
@@ -289,6 +326,17 @@ jobs:
                   (unsigned long long)v[7].Reg64, (unsigned long long)v[8].Reg64,
                   (unsigned long long)v[9].Segment.Base);
               LOG("[cr2 (last page fault address) %llX]\n", (unsigned long long)v[10].Reg64);
+
+              // The interrupt table and the descriptor table: a fault is only handled if these are set.
+              const WHV_REGISTER_NAME tnames[] = {WHvX64RegisterIdtr, WHvX64RegisterGdtr};
+              WHV_REGISTER_VALUE t[2] = {};
+              if (SUCCEEDED(WHvGetVirtualProcessorRegisters(part, 0, tnames, 2, t))) {
+                  LOG("[idtr base %llX limit %X] [gdtr base %llX limit %X]\n",
+                      (unsigned long long)t[0].Table.Base, (unsigned)t[0].Table.Limit,
+                      (unsigned long long)t[1].Table.Base, (unsigned)t[1].Table.Limit);
+              }
+
+              DumpPaging(ram, v[6].Reg64, v[10].Reg64);
           }
 
           // Prints the 16 bytes of guest memory at an address, so we can see the code that stopped.
@@ -384,21 +432,21 @@ jobs:
                           (unsigned)exit.VpException.ExceptionType, (unsigned)exit.VpException.ErrorCode,
                           (unsigned long long)exit.VpException.ExceptionParameter,
                           (unsigned long long)exit.VpContext.Rip);
-                      DumpRegisters(part);
+                      DumpRegisters(part, ram);
                       DumpBytes(ram, exit.VpContext.Rip);
                       return 0;
 
                   } else if (exit.ExitReason == WHvRunVpExitReasonUnrecoverableException) {
                       LOG("\n[stop] unrecoverable exception (guest faulted and could not recover) at RIP 0x%llX\n",
                           (unsigned long long)exit.VpContext.Rip);
-                      DumpRegisters(part);
+                      DumpRegisters(part, ram);
                       DumpBytes(ram, exit.VpContext.Rip);
                       return 0;
 
                   } else {
                       LOG("\n[stop] unexpected VM exit, reason %d, RIP 0x%llX\n",
                           (int)exit.ExitReason, (unsigned long long)exit.VpContext.Rip);
-                      DumpRegisters(part);
+                      DumpRegisters(part, ram);
                       DumpBytes(ram, exit.VpContext.Rip);
                       return 0;
                   }
