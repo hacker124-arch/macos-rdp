@@ -104,6 +104,31 @@ jobs:
               }
           }
 
+          // CMOS (ports 0x70/0x71). The firmware reads the memory size from here. If these read back as
+          // all ones, it thinks the machine has about 4 GB and puts its own data above 4 GB, where we have no memory.
+          static UINT8 g_cmosIndex = 0;
+
+          static UINT8 CmosValue(UINT8 index) {
+              const UINT64 ramKb = RAM_SIZE / 1024;
+              // Extended memory from 1 MB to 16 MB, in KB (capped at 15 MB).
+              UINT64 ext1Kb = 0;
+              if (ramKb > 1024) ext1Kb = (ramKb - 1024 < 15360) ? (ramKb - 1024) : 15360;
+              // Memory above 16 MB, in 64 KB units.
+              const UINT64 above16Mb = ramKb > 16384 ? (ramKb - 16384) / 64 : 0;
+              switch (index) {
+                  case 0x0A: return 0x26;                                  // status A: no update in progress
+                  case 0x0B: return 0x02;                                  // status B: 24-hour mode
+                  case 0x0D: return 0x80;                                  // status D: battery good
+                  case 0x15: return 0x80;                                  // base memory 640 KB (low byte)
+                  case 0x16: return 0x02;                                  // base memory 640 KB (high byte)
+                  case 0x17: case 0x30: return static_cast<UINT8>(ext1Kb & 0xFF);
+                  case 0x18: case 0x31: return static_cast<UINT8>((ext1Kb >> 8) & 0xFF);
+                  case 0x34: return static_cast<UINT8>(above16Mb & 0xFF);
+                  case 0x35: return static_cast<UINT8>((above16Mb >> 8) & 0xFF);
+                  default:   return 0;
+              }
+          }
+
           static void PutU32(uint8_t* p, UINT32 v) {
               p[0] = v & 0xFF;
               p[1] = (v >> 8) & 0xFF;
@@ -383,6 +408,10 @@ jobs:
                               dev.vbeIndex = static_cast<UINT16>(value & 0xFFFF);
                           } else if (port == 0x1CF) {
                               VbeWrite(dev, static_cast<UINT16>(value & 0xFFFF));
+                          } else if (port == 0x70) {
+                              g_cmosIndex = static_cast<UINT8>(value & 0x7F);
+                          } else if (port == 0x71 || port == 0x20 || port == 0x21 || port == 0xA0 || port == 0xA1) {
+                              // ignored: CMOS data writes and the interrupt controller (not emulated yet)
                           } else if (port == 0x80 || port == 0x0092) {
                               // ignored: debug port and system control port
                           } else if (unknownPorts.insert(port).second) {
@@ -401,10 +430,15 @@ jobs:
                               value = dev.vbeIndex;
                           } else if (port == 0x1CF) {
                               value = VbeRead(dev);
+                          } else if (port == 0x70) {
+                              value = g_cmosIndex;
+                          } else if (port == 0x71) {
+                              value = CmosValue(g_cmosIndex);
                           } else {
                               value = ReadPort(port);
                           }
                           if (port != 0x3FD && port != 0x3FA && port != 0x0511 && port != 0x0092 &&
+                              port != 0x70 && port != 0x71 &&
                               port != 0xCF8 && !(port >= 0xCFC && port <= 0xCFF) &&
                               port != 0x1CE && port != 0x1CF && unknownPorts.insert(port).second)
                               LOG("\n[note] read from unhandled port 0x%04X\n", port);
