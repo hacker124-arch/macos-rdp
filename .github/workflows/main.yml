@@ -123,6 +123,28 @@ jobs:
               return v;
           }
 
+          // Prints the main registers, so we can see what the code at RIP was doing.
+          static void DumpRegisters(WHV_PARTITION_HANDLE part) {
+              const WHV_REGISTER_NAME names[] = {
+                  WHvX64RegisterRax, WHvX64RegisterRcx, WHvX64RegisterRsi, WHvX64RegisterRdi,
+                  WHvX64RegisterRsp, WHvX64RegisterCr0, WHvX64RegisterCr3, WHvX64RegisterCr4,
+                  WHvX64RegisterEfer, WHvX64RegisterCs,
+              };
+              WHV_REGISTER_VALUE v[10] = {};
+              if (FAILED(WHvGetVirtualProcessorRegisters(part, 0, names, 10, v))) {
+                  LOG("[could not read registers]\n");
+                  return;
+              }
+              LOG("[rax %llX rcx %llX rsi %llX rdi %llX rsp %llX]\n",
+                  (unsigned long long)v[0].Reg64, (unsigned long long)v[1].Reg64,
+                  (unsigned long long)v[2].Reg64, (unsigned long long)v[3].Reg64,
+                  (unsigned long long)v[4].Reg64);
+              LOG("[cr0 %llX cr3 %llX cr4 %llX efer %llX cs base %llX]\n",
+                  (unsigned long long)v[5].Reg64, (unsigned long long)v[6].Reg64,
+                  (unsigned long long)v[7].Reg64, (unsigned long long)v[8].Reg64,
+                  (unsigned long long)v[9].Segment.Base);
+          }
+
           // Prints the 16 bytes of guest memory at an address, so we can see the code that stopped.
           static void DumpBytes(const uint8_t* ram, UINT64 address) {
               if (address + 16 > RAM_SIZE) {
@@ -240,6 +262,7 @@ jobs:
                   } else {
                       LOG("\n[stop] unexpected VM exit, reason %d, RIP 0x%llX\n",
                           (int)exit.ExitReason, (unsigned long long)exit.VpContext.Rip);
+                      DumpRegisters(part);
                       DumpBytes(ram, exit.VpContext.Rip);
                       return 0;
                   }
