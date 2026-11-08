@@ -123,8 +123,8 @@ jobs:
               std::memcpy(codeMem, code.data(), code.size());
               std::memcpy(varsMem, vars.data(), vars.size());
 
-              const UINT32 rwx = WHvMapGpaRangeFlagRead | WHvMapGpaRangeFlagWrite | WHvMapGpaRangeFlagExecute;
-              const UINT32 rw  = WHvMapGpaRangeFlagRead | WHvMapGpaRangeFlagWrite;
+              const auto rwx = static_cast<WHV_MAP_GPA_RANGE_FLAGS>(WHvMapGpaRangeFlagRead | WHvMapGpaRangeFlagWrite | WHvMapGpaRangeFlagExecute);
+              const auto rw = static_cast<WHV_MAP_GPA_RANGE_FLAGS>(WHvMapGpaRangeFlagRead | WHvMapGpaRangeFlagWrite);
               CHECK(WHvMapGpaRange(part, ram, 0, RAM_SIZE, rwx), "map RAM");
               CHECK(WHvMapGpaRange(part, codeMem, codeBase, code.size(), rwx), "map firmware code");
               CHECK(WHvMapGpaRange(part, varsMem, varsBase, vars.size(), rw), "map firmware vars");
