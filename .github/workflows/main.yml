@@ -128,10 +128,10 @@ jobs:
               const WHV_REGISTER_NAME names[] = {
                   WHvX64RegisterRax, WHvX64RegisterRcx, WHvX64RegisterRsi, WHvX64RegisterRdi,
                   WHvX64RegisterRsp, WHvX64RegisterCr0, WHvX64RegisterCr3, WHvX64RegisterCr4,
-                  WHvX64RegisterEfer, WHvX64RegisterCs,
+                  WHvX64RegisterEfer, WHvX64RegisterCs, WHvX64RegisterCr2,
               };
-              WHV_REGISTER_VALUE v[10] = {};
-              if (FAILED(WHvGetVirtualProcessorRegisters(part, 0, names, 10, v))) {
+              WHV_REGISTER_VALUE v[11] = {};
+              if (FAILED(WHvGetVirtualProcessorRegisters(part, 0, names, 11, v))) {
                   LOG("[could not read registers]\n");
                   return;
               }
@@ -143,6 +143,7 @@ jobs:
                   (unsigned long long)v[5].Reg64, (unsigned long long)v[6].Reg64,
                   (unsigned long long)v[7].Reg64, (unsigned long long)v[8].Reg64,
                   (unsigned long long)v[9].Segment.Base);
+              LOG("[cr2 (last page fault address) %llX]\n", (unsigned long long)v[10].Reg64);
           }
 
           // Prints the 16 bytes of guest memory at an address, so we can see the code that stopped.
@@ -259,6 +260,22 @@ jobs:
                       LOG("\n[guest halted at RIP 0x%llX]\n", (unsigned long long)exit.VpContext.Rip);
                       return 0;
 
+                  } else if (exit.ExitReason == WHvRunVpExitReasonException) {
+                      LOG("\n[stop] guest exception %u, error code 0x%X, parameter 0x%llX, RIP 0x%llX\n",
+                          (unsigned)exit.VpException.ExceptionType, (unsigned)exit.VpException.ErrorCode,
+                          (unsigned long long)exit.VpException.ExceptionParameter,
+                          (unsigned long long)exit.VpContext.Rip);
+                      DumpRegisters(part);
+                      DumpBytes(ram, exit.VpContext.Rip);
+                      return 0;
+
+                  } else if (exit.ExitReason == WHvRunVpExitReasonUnrecoverableException) {
+                      LOG("\n[stop] unrecoverable exception (guest faulted and could not recover) at RIP 0x%llX\n",
+                          (unsigned long long)exit.VpContext.Rip);
+                      DumpRegisters(part);
+                      DumpBytes(ram, exit.VpContext.Rip);
+                      return 0;
+
                   } else {
                       LOG("\n[stop] unexpected VM exit, reason %d, RIP 0x%llX\n",
                           (int)exit.ExitReason, (unsigned long long)exit.VpContext.Rip);
@@ -308,6 +325,13 @@ jobs:
                                                        &apic, sizeof(apic));
               if (FAILED(apicHr))
                   LOG("Note: APIC emulation not enabled (0x%08lX)\n", (unsigned long)apicHr);
+
+              // Ask Windows to stop the VM on page faults (exception vector 14), so we see the address.
+              UINT64 exceptionBitmap = 1ULL << 14;
+              HRESULT excHr = WHvSetPartitionProperty(part, WHvPartitionPropertyCodeExceptionExitBitmap,
+                                                      &exceptionBitmap, sizeof(exceptionBitmap));
+              if (FAILED(excHr))
+                  LOG("Note: page fault reporting not enabled (0x%08lX)\n", (unsigned long)excHr);
 
               CHECK(WHvSetupPartition(part), "WHvSetupPartition");
 
