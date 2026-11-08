@@ -378,6 +378,7 @@ jobs:
           // Runs the virtual CPU until the guest stops. Returns 0 on a normal stop, 1 on error.
           static int RunLoop(WHV_PARTITION_HANDLE part, const uint8_t* ram, Devices& dev) {
               std::set<UINT16> unknownPorts;
+              std::set<UINT32> unknownMsrs;
               UINT16 fwSelector = 0;
               UINT32 fwOffset = 0;
               std::vector<uint8_t> fwItem = FwCfgItem(0);
@@ -447,6 +448,20 @@ jobs:
                       }
 
                       // Move past the IN/OUT instruction so it is not run again.
+                      CHECK(SetReg64(part, WHvX64RegisterRip,
+                                     exit.VpContext.Rip + exit.VpContext.InstructionLength),
+                            "advance RIP");
+
+                  } else if (exit.ExitReason == WHvRunVpExitReasonX64MsrAccess) {
+                      // The firmware reads or writes an MSR we do not emulate (for example IA32_PLATFORM_ID, 0x17).
+                      // Reads return 0 and writes are ignored, instead of letting the CPU raise #GP.
+                      const auto& msr = exit.MsrAccess;
+                      if (!msr.AccessInfo.IsWrite) {
+                          if (unknownMsrs.insert(msr.MsrNumber).second)
+                              LOG("\n[note] read from unemulated MSR 0x%X\n", (unsigned)msr.MsrNumber);
+                          CHECK(SetReg64(part, WHvX64RegisterRax, 0), "set RAX");
+                          CHECK(SetReg64(part, WHvX64RegisterRdx, 0), "set RDX");
+                      }
                       CHECK(SetReg64(part, WHvX64RegisterRip,
                                      exit.VpContext.Rip + exit.VpContext.InstructionLength),
                             "advance RIP");
@@ -533,6 +548,14 @@ jobs:
                                                       &exceptionBitmap, sizeof(exceptionBitmap));
               if (FAILED(excHr))
                   LOG("Note: page fault reporting not enabled (0x%08lX)\n", (unsigned long)excHr);
+
+              // Ask Windows to stop on RDMSR/WRMSR, so we can answer for MSRs we do not emulate.
+              WHV_EXTENDED_VM_EXITS extendedExits = {};
+              extendedExits.MsrExit = 1;
+              HRESULT msrHr = WHvSetPartitionProperty(part, WHvPartitionPropertyCodeExtendedVmExits,
+                                                      &extendedExits, sizeof(extendedExits));
+              if (FAILED(msrHr))
+                  LOG("Note: MSR exits not enabled (0x%08lX)\n", (unsigned long)msrHr);
 
               CHECK(WHvSetupPartition(part), "WHvSetupPartition");
 
