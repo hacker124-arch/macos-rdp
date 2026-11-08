@@ -22,9 +22,10 @@ jobs:
         run: |
           @'
           // whpx_firmware.cpp
-          // Quantum VM engine: loads UEFI firmware (OVMF_CODE.fd + OVMF_VARS.fd) into a WHPX
-          // virtual machine, runs it from the firmware reset address, and sends the screen to
-          // the Quantum VM app.
+          // Quantum VM engine: runs UEFI firmware (OVMF_CODE.fd + OVMF_VARS.fd) in a WHPX virtual
+          // machine. The engine provides its own hardware: memory, serial port, a QEMU-style
+          // firmware config, and a graphics card (PCI device 1234:1111, Bochs VBE mode setting)
+          // whose memory is sent straight to the Quantum VM app.
           //
           // Output (stdout, binary): one frame after another. Each frame is:
           //   "QVMF" (4 bytes), width (u32 little endian), height (u32 little endian),
@@ -67,13 +68,18 @@ jobs:
 
           static const UINT64 RAM_SIZE = 256ULL * 1024 * 1024;   // guest RAM at address 0
           static const UINT64 FOUR_GB = 0x100000000ULL;          // firmware ends at the top of 4 GB
-          static const UINT64 SCREEN_OFFSET = 0x0E000000ULL;     // where the screen lives in guest RAM
-          static const UINT32 SCREEN_W = 1024;
-          static const UINT32 SCREEN_H = 768;
-          static const size_t SCREEN_BYTES = static_cast<size_t>(SCREEN_W) * SCREEN_H * 4;
+          static const UINT64 SCREEN_OFFSET = 0x0E000000ULL;     // screen before a graphics mode is set
+          static const UINT64 FB_BASE = 0xE0000000ULL;           // graphics card memory, as the guest sees it
+          static const UINT64 FB_SIZE = 16ULL * 1024 * 1024;     // 16 MB of graphics memory
+          static const UINT64 PCI_BAR_MASK = 0xFF000000ULL;      // BAR size 16 MB: address bits 24 and up
+          static const UINT16 VBE_ID = 0xB0C5;                   // Bochs VBE interface identifier
           static const int FRAME_MS = 66;                        // about 15 frames per second
 
           static std::atomic<bool> g_running{true};
+          static std::atomic<bool> g_screen_on{false};           // true once the firmware sets a graphics mode
+          static std::atomic<UINT32> g_screen_w{1024};
+          static std::atomic<UINT32> g_screen_h{768};
+          static uint8_t* g_fb = nullptr;                        // the graphics card memory
 
           static bool ReadWholeFile(const std::string& path, std::vector<uint8_t>& out) {
               std::ifstream f(path, std::ios::binary);
@@ -106,8 +112,6 @@ jobs:
           }
 
           // QEMU firmware config (ports 0x510 / 0x511). OVMF reads these items at startup.
-          // Item 0x0000 is the signature, 0x0001 the feature bits (none), 0x0003 the RAM size,
-          // 0x0019 the file count (none). Unknown items read as empty.
           static std::vector<uint8_t> FwCfgItem(UINT16 key) {
               std::vector<uint8_t> v;
               switch (key) {
@@ -121,6 +125,147 @@ jobs:
                   default: break;
               }
               return v;
+          }
+
+          // Everything the engine emulates besides memory and the CPU.
+          struct Devices {
+              WHV_PARTITION_HANDLE part = nullptr;
+              UINT64 fbMapped = FB_BASE;        // where the graphics memory is mapped right now
+              UINT32 pciAddress = 0;            // PCI configuration address (port 0xCF8)
+              UINT32 pciCommand = 0;
+              UINT32 barValue = 0;              // graphics card BAR0: address + flags
+              bool barSizing = false;           // firmware is asking how big the BAR is
+              UINT16 vbeIndex = 0;              // Bochs VBE register selected through port 0x1CE
+              UINT16 vbe[10] = {};              // Bochs VBE registers 0..9
+          };
+
+          static void ApplyMode(const Devices& d) {
+              const bool on = (d.vbe[4] & 0x1) != 0;
+              const UINT32 w = d.vbe[1];
+              const UINT32 h = d.vbe[2];
+              if (on && w > 0 && h > 0 && w <= 2048 && h <= 1536 &&
+                  static_cast<UINT64>(w) * h * 4 <= FB_SIZE) {
+                  g_screen_w = w;
+                  g_screen_h = h;
+                  g_screen_on = true;
+                  LOG("[screen] mode %ux%u\n", w, h);
+              } else {
+                  g_screen_on = false;
+              }
+          }
+
+          static UINT16 VbeRead(const Devices& d) {
+              if (d.vbeIndex == 0) return VBE_ID;
+              if (d.vbeIndex < 10) return d.vbe[d.vbeIndex];
+              return 0;
+          }
+
+          static void VbeWrite(Devices& d, UINT16 value) {
+              if (d.vbeIndex == 0 || d.vbeIndex >= 10) return;   // version and unknown registers are ignored
+              d.vbe[d.vbeIndex] = value;
+              if (d.vbeIndex == 4) ApplyMode(d);                  // the ENABLE register
+              if (d.vbeIndex == 1 || d.vbeIndex == 2) ApplyMode(d);
+          }
+
+          // The PCI bus has one device: the graphics card at bus 0, device 2, function 0.
+          static bool PciSelected(const Devices& d) {
+              const UINT32 a = d.pciAddress;
+              return (a & 0x80000000u) && ((a >> 16) & 0xFF) == 0 &&
+                     ((a >> 11) & 0x1F) == 2 && ((a >> 8) & 0x7) == 0;
+          }
+
+          static UINT32 PciRead(const Devices& d) {
+              if (!PciSelected(d)) return 0xFFFFFFFF;
+              switch (d.pciAddress & 0xFC) {
+                  case 0x00: return 0x11111234u;                            // vendor 0x1234, device 0x1111
+                  case 0x04: return d.pciCommand;
+                  case 0x08: return 0x03000002u;                            // display controller, revision 2
+                  case 0x0C: return 0x00000000u;                            // header type 0
+                  case 0x10: return d.barSizing ? (static_cast<UINT32>(PCI_BAR_MASK) | 0x8) : d.barValue;
+                  default:   return 0;
+              }
+          }
+
+          static void PciWrite(Devices& d, UINT32 value) {
+              if (!PciSelected(d)) return;
+              switch (d.pciAddress & 0xFC) {
+                  case 0x04:
+                      d.pciCommand = value & 0xFFFF;
+                      break;
+                  case 0x10: {
+                      if (value == 0xFFFFFFFFu) {                           // size probe: answer on the next read
+                          d.barSizing = true;
+                          break;
+                      }
+                      d.barSizing = false;
+                      const UINT64 base = value & PCI_BAR_MASK;
+                      if (base < RAM_SIZE || base + FB_SIZE > FOUR_GB) {
+                          LOG("[pci] graphics memory base 0x%08X is not allowed\n", value);
+                          break;
+                      }
+                      if (base != d.fbMapped) {
+                          WHvUnmapGpaRange(d.part, d.fbMapped, FB_SIZE);
+                          HRESULT hr = WHvMapGpaRange(d.part, g_fb, base, FB_SIZE,
+                                                      WHvMapGpaRangeFlagRead | WHvMapGpaRangeFlagWrite);
+                          if (FAILED(hr)) {
+                              LOG("[pci] could not map graphics memory at 0x%llX (0x%08lX)\n",
+                                  (unsigned long long)base, (unsigned long)hr);
+                              break;
+                          }
+                          d.fbMapped = base;
+                          LOG("[pci] graphics memory at 0x%llX\n", (unsigned long long)base);
+                      }
+                      d.barValue = static_cast<UINT32>(base) | 0x8;
+                      break;
+                  }
+                  default:
+                      break;
+              }
+          }
+
+          // Sends one frame to the app.
+          static void SendFrame(UINT32 w, UINT32 h, const uint8_t* pixels) {
+              const size_t bytes = static_cast<size_t>(w) * h * 4;
+              std::vector<uint8_t> frame(12 + bytes);
+              std::memcpy(frame.data(), "QVMF", 4);
+              PutU32(frame.data() + 4, w);
+              PutU32(frame.data() + 8, h);
+              std::memcpy(frame.data() + 12, pixels, bytes);
+              std::fwrite(frame.data(), 1, frame.size(), stdout);
+              std::fflush(stdout);
+          }
+
+          // Sends the screen until the VM stops: the graphics card memory once the firmware has set
+          // a mode, otherwise the old screen area in RAM.
+          static void ScreenLoop(const uint8_t* ram) {
+              while (g_running) {
+                  if (g_screen_on) {
+                      SendFrame(g_screen_w, g_screen_h, g_fb);
+                  } else {
+                      SendFrame(1024, 768, ram + SCREEN_OFFSET);
+                  }
+                  std::this_thread::sleep_for(std::chrono::milliseconds(FRAME_MS));
+              }
+          }
+
+          // Test picture: a moving gradient, so the display can be checked without a VM.
+          static int TestPattern() {
+              const UINT32 w = 1024, h = 768;
+              std::vector<uint8_t> pixels(static_cast<size_t>(w) * h * 4);
+              for (uint32_t t = 0;; ++t) {
+                  for (uint32_t y = 0; y < h; ++y) {
+                      for (uint32_t x = 0; x < w; ++x) {
+                          uint8_t* p = &pixels[(static_cast<size_t>(y) * w + x) * 4];
+                          p[0] = static_cast<uint8_t>(x);            // blue
+                          p[1] = static_cast<uint8_t>(y);            // green
+                          p[2] = static_cast<uint8_t>(x + t * 2);    // red
+                          p[3] = 0;
+                      }
+                  }
+                  SendFrame(w, h, pixels.data());
+                  std::this_thread::sleep_for(std::chrono::milliseconds(FRAME_MS));
+              }
+              return 0;
           }
 
           // Prints the main registers, so we can see what the code at RIP was doing.
@@ -157,52 +302,8 @@ jobs:
               LOG("]\n");
           }
 
-          // A frame is the header followed by the pixels. The header is written once.
-          static std::vector<uint8_t> MakeFrame() {
-              std::vector<uint8_t> frame(12 + SCREEN_BYTES, 0);
-              std::memcpy(frame.data(), "QVMF", 4);
-              PutU32(frame.data() + 4, SCREEN_W);
-              PutU32(frame.data() + 8, SCREEN_H);
-              return frame;
-          }
-
-          static void SendFrame(std::vector<uint8_t>& frame, const uint8_t* pixels) {
-              std::memcpy(frame.data() + 12, pixels, SCREEN_BYTES);
-              std::fwrite(frame.data(), 1, frame.size(), stdout);
-              std::fflush(stdout);
-          }
-
-          // Sends the screen from guest memory until the VM stops.
-          static void ScreenLoop(const uint8_t* ram) {
-              std::vector<uint8_t> frame = MakeFrame();
-              while (g_running) {
-                  SendFrame(frame, ram + SCREEN_OFFSET);
-                  std::this_thread::sleep_for(std::chrono::milliseconds(FRAME_MS));
-              }
-          }
-
-          // Test picture: a moving gradient, so the display can be checked without a VM.
-          static int TestPattern() {
-              std::vector<uint8_t> frame = MakeFrame();
-              std::vector<uint8_t> pixels(SCREEN_BYTES);
-              for (uint32_t t = 0;; ++t) {
-                  for (uint32_t y = 0; y < SCREEN_H; ++y) {
-                      for (uint32_t x = 0; x < SCREEN_W; ++x) {
-                          uint8_t* p = &pixels[(static_cast<size_t>(y) * SCREEN_W + x) * 4];
-                          p[0] = static_cast<uint8_t>(x);            // blue
-                          p[1] = static_cast<uint8_t>(y);            // green
-                          p[2] = static_cast<uint8_t>(x + t * 2);    // red
-                          p[3] = 0;
-                      }
-                  }
-                  SendFrame(frame, pixels.data());
-                  std::this_thread::sleep_for(std::chrono::milliseconds(FRAME_MS));
-              }
-              return 0;
-          }
-
           // Runs the virtual CPU until the guest stops. Returns 0 on a normal stop, 1 on error.
-          static int RunLoop(WHV_PARTITION_HANDLE part, const uint8_t* ram) {
+          static int RunLoop(WHV_PARTITION_HANDLE part, const uint8_t* ram, Devices& dev) {
               std::set<UINT16> unknownPorts;
               UINT16 fwSelector = 0;
               UINT32 fwOffset = 0;
@@ -219,12 +320,21 @@ jobs:
                       const UINT64 mask = size == 1 ? 0xFFULL : size == 2 ? 0xFFFFULL : 0xFFFFFFFFULL;
 
                       if (io.AccessInfo.IsWrite) {
+                          const UINT32 value = static_cast<UINT32>(io.Rax & mask);
                           if (port == 0x3F8) {
-                              std::fputc(static_cast<int>(io.Rax & 0xFF), stderr);   // serial output goes to the log
+                              std::fputc(static_cast<int>(value & 0xFF), stderr);   // serial output goes to the log
                           } else if (port == 0x0510) {
-                              fwSelector = static_cast<UINT16>(io.Rax & 0xFFFF);
+                              fwSelector = static_cast<UINT16>(value & 0xFFFF);
                               fwOffset = 0;
                               fwItem = FwCfgItem(fwSelector);
+                          } else if (port == 0xCF8) {
+                              dev.pciAddress = value;
+                          } else if (port >= 0xCFC && port <= 0xCFF) {
+                              PciWrite(dev, value);
+                          } else if (port == 0x1CE) {
+                              dev.vbeIndex = static_cast<UINT16>(value & 0xFFFF);
+                          } else if (port == 0x1CF) {
+                              VbeWrite(dev, static_cast<UINT16>(value & 0xFFFF));
                           } else if (port == 0x80 || port == 0x0092) {
                               // ignored: debug port and system control port
                           } else if (unknownPorts.insert(port).second) {
@@ -235,11 +345,20 @@ jobs:
                           if (port == 0x0511) {
                               value = fwOffset < fwItem.size() ? fwItem[fwOffset] : 0;
                               ++fwOffset;
+                          } else if (port == 0xCF8) {
+                              value = dev.pciAddress;
+                          } else if (port >= 0xCFC && port <= 0xCFF) {
+                              value = PciRead(dev) >> ((port & 3) * 8);
+                          } else if (port == 0x1CE) {
+                              value = dev.vbeIndex;
+                          } else if (port == 0x1CF) {
+                              value = VbeRead(dev);
                           } else {
                               value = ReadPort(port);
                           }
                           if (port != 0x3FD && port != 0x3FA && port != 0x0511 && port != 0x0092 &&
-                              unknownPorts.insert(port).second)
+                              port != 0xCF8 && !(port >= 0xCFC && port <= 0xCFF) &&
+                              port != 0x1CE && port != 0x1CF && unknownPorts.insert(port).second)
                               LOG("\n[note] read from unhandled port 0x%04X\n", port);
                           UINT64 newRax = (io.Rax & ~mask) | (value & mask);
                           CHECK(SetReg64(part, WHvX64RegisterRax, newRax), "set RAX");
@@ -335,11 +454,13 @@ jobs:
 
               CHECK(WHvSetupPartition(part), "WHvSetupPartition");
 
-              // 3. Map memory: RAM, the firmware code (read + execute) and the variable store.
+              // 3. Map memory: RAM, the firmware code (read + execute), the variable store and
+              //    the graphics card memory.
               void* ram = VirtualAlloc(nullptr, RAM_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
               void* codeMem = VirtualAlloc(nullptr, code.size(), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
               void* varsMem = VirtualAlloc(nullptr, vars.size(), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-              if (!ram || !codeMem || !varsMem) { LOG("VirtualAlloc failed\n"); return 1; }
+              g_fb = static_cast<uint8_t*>(VirtualAlloc(nullptr, FB_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+              if (!ram || !codeMem || !varsMem || !g_fb) { LOG("VirtualAlloc failed\n"); return 1; }
               std::memcpy(codeMem, code.data(), code.size());
               std::memcpy(varsMem, vars.data(), vars.size());
 
@@ -348,6 +469,15 @@ jobs:
               CHECK(WHvMapGpaRange(part, ram, 0, RAM_SIZE, rwx), "map RAM");
               CHECK(WHvMapGpaRange(part, codeMem, codeBase, code.size(), rwx), "map firmware code");
               CHECK(WHvMapGpaRange(part, varsMem, varsBase, vars.size(), rw), "map firmware vars");
+              CHECK(WHvMapGpaRange(part, g_fb, FB_BASE, FB_SIZE, rw), "map graphics memory");
+
+              Devices dev;
+              dev.part = part;
+              dev.fbMapped = FB_BASE;
+              dev.barValue = static_cast<UINT32>(FB_BASE) | 0x8;
+              dev.vbe[1] = 1024;
+              dev.vbe[2] = 768;
+              dev.vbe[3] = 32;
 
               // 4. Create the CPU and start it at the x86 reset vector (0xFFFFFFF0),
               //    in the same state a real PC uses after power-on.
@@ -378,7 +508,7 @@ jobs:
 
               // 5. Send the screen to the app while the firmware runs.
               std::thread screen(ScreenLoop, static_cast<const uint8_t*>(ram));
-              int result = RunLoop(part, static_cast<const uint8_t*>(ram));
+              int result = RunLoop(part, static_cast<const uint8_t*>(ram), dev);
               g_running = false;
               screen.join();
 
@@ -387,6 +517,7 @@ jobs:
               VirtualFree(ram, 0, MEM_RELEASE);
               VirtualFree(codeMem, 0, MEM_RELEASE);
               VirtualFree(varsMem, 0, MEM_RELEASE);
+              VirtualFree(g_fb, 0, MEM_RELEASE);
               return result;
           }
           '@ | Set-Content -Encoding ascii whpx_firmware.cpp
