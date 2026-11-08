@@ -476,7 +476,12 @@ jobs:
                       LOG("[heartbeat] RIP 0x%llX\n", (unsigned long long)exit.VpContext.Rip);
                       // The first time we see a new address, print the instructions and registers there.
                       if (seenRips.insert(exit.VpContext.Rip).second) {
-                          DumpBytes(ram, exit.VpContext.Rip);
+                          // Show the 64 bytes before this address too, so the code that leads here is visible.
+                          const UINT64 rip = exit.VpContext.Rip;
+                          DumpBytes(ram, rip - 48);
+                          DumpBytes(ram, rip - 32);
+                          DumpBytes(ram, rip - 16);
+                          DumpBytes(ram, rip);
                           DumpRegisters(part, ram);
                       }
 
