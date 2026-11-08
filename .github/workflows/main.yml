@@ -551,7 +551,7 @@ jobs:
 
               // Ask Windows to stop on RDMSR/WRMSR, so we can answer for MSRs we do not emulate.
               WHV_EXTENDED_VM_EXITS extendedExits = {};
-              extendedExits.MsrExit = 1;
+              extendedExits.X64MsrExit = 1;
               HRESULT msrHr = WHvSetPartitionProperty(part, WHvPartitionPropertyCodeExtendedVmExits,
                                                       &extendedExits, sizeof(extendedExits));
               if (FAILED(msrHr))
