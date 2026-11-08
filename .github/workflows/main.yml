@@ -237,14 +237,10 @@ jobs:
                       LOG("\n[guest halted at RIP 0x%llX]\n", (unsigned long long)exit.VpContext.Rip);
                       return 0;
 
-                  } else if (exit.ExitReason == WHvRunVpExitReasonUnsupportedFeature) {
-                      LOG("\n[stop] unsupported feature at RIP 0x%llX\n", (unsigned long long)exit.VpContext.Rip);
-                      DumpBytes(ram, exit.VpContext.Rip);
-                      return 0;
-
                   } else {
                       LOG("\n[stop] unexpected VM exit, reason %d, RIP 0x%llX\n",
                           (int)exit.ExitReason, (unsigned long long)exit.VpContext.Rip);
+                      DumpBytes(ram, exit.VpContext.Rip);
                       return 0;
                   }
               }
