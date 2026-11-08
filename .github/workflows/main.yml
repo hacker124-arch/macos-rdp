@@ -93,6 +93,7 @@ jobs:
               switch (port) {
                   case 0x3FD: return 0x60;            // COM1 line status: transmitter empty and ready
                   case 0x3FA: return 0x01;            // COM1 interrupt status: nothing pending
+                  case 0x0092: return 0x02;           // system control port: A20 gate enabled
                   default:    return 0xFFFFFFFF;      // "no device here" (reads back all ones)
               }
           }
@@ -102,6 +103,35 @@ jobs:
               p[1] = (v >> 8) & 0xFF;
               p[2] = (v >> 16) & 0xFF;
               p[3] = (v >> 24) & 0xFF;
+          }
+
+          // QEMU firmware config (ports 0x510 / 0x511). OVMF reads these items at startup.
+          // Item 0x0000 is the signature, 0x0001 the feature bits (none), 0x0003 the RAM size,
+          // 0x0019 the file count (none). Unknown items read as empty.
+          static std::vector<uint8_t> FwCfgItem(UINT16 key) {
+              std::vector<uint8_t> v;
+              switch (key) {
+                  case 0x0000: v = {'Q', 'E', 'M', 'U'}; break;
+                  case 0x0001: v.assign(4, 0); break;
+                  case 0x0003:
+                      v.assign(8, 0);
+                      for (int i = 0; i < 8; ++i) v[i] = static_cast<uint8_t>(RAM_SIZE >> (8 * i));
+                      break;
+                  case 0x0019: v.assign(4, 0); break;
+                  default: break;
+              }
+              return v;
+          }
+
+          // Prints the 16 bytes of guest memory at an address, so we can see the code that stopped.
+          static void DumpBytes(const uint8_t* ram, UINT64 address) {
+              if (address + 16 > RAM_SIZE) {
+                  LOG("[RIP is outside guest RAM]\n");
+                  return;
+              }
+              LOG("[bytes at RIP:");
+              for (int i = 0; i < 16; ++i) LOG(" %02X", ram[address + i]);
+              LOG("]\n");
           }
 
           // A frame is the header followed by the pixels. The header is written once.
@@ -149,8 +179,11 @@ jobs:
           }
 
           // Runs the virtual CPU until the guest stops. Returns 0 on a normal stop, 1 on error.
-          static int RunLoop(WHV_PARTITION_HANDLE part) {
+          static int RunLoop(WHV_PARTITION_HANDLE part, const uint8_t* ram) {
               std::set<UINT16> unknownPorts;
+              UINT16 fwSelector = 0;
+              UINT32 fwOffset = 0;
+              std::vector<uint8_t> fwItem = FwCfgItem(0);
               LOG("Starting firmware...\n");
               for (;;) {
                   WHV_RUN_VP_EXIT_CONTEXT exit = {};
@@ -165,12 +198,25 @@ jobs:
                       if (io.AccessInfo.IsWrite) {
                           if (port == 0x3F8) {
                               std::fputc(static_cast<int>(io.Rax & 0xFF), stderr);   // serial output goes to the log
-                          } else if (port != 0x80 && unknownPorts.insert(port).second) {
+                          } else if (port == 0x0510) {
+                              fwSelector = static_cast<UINT16>(io.Rax & 0xFFFF);
+                              fwOffset = 0;
+                              fwItem = FwCfgItem(fwSelector);
+                          } else if (port == 0x80 || port == 0x0092) {
+                              // ignored: debug port and system control port
+                          } else if (unknownPorts.insert(port).second) {
                               LOG("\n[note] write to unhandled port 0x%04X\n", port);
                           }
                       } else {
-                          UINT64 value = ReadPort(port);
-                          if (unknownPorts.insert(port).second && port != 0x3FD && port != 0x3FA)
+                          UINT64 value;
+                          if (port == 0x0511) {
+                              value = fwOffset < fwItem.size() ? fwItem[fwOffset] : 0;
+                              ++fwOffset;
+                          } else {
+                              value = ReadPort(port);
+                          }
+                          if (port != 0x3FD && port != 0x3FA && port != 0x0511 && port != 0x0092 &&
+                              unknownPorts.insert(port).second)
                               LOG("\n[note] read from unhandled port 0x%04X\n", port);
                           UINT64 newRax = (io.Rax & ~mask) | (value & mask);
                           CHECK(SetReg64(part, WHvX64RegisterRax, newRax), "set RAX");
@@ -189,6 +235,11 @@ jobs:
 
                   } else if (exit.ExitReason == WHvRunVpExitReasonX64Halt) {
                       LOG("\n[guest halted at RIP 0x%llX]\n", (unsigned long long)exit.VpContext.Rip);
+                      return 0;
+
+                  } else if (exit.ExitReason == WHvRunVpExitReasonUnsupportedFeature) {
+                      LOG("\n[stop] unsupported feature at RIP 0x%llX\n", (unsigned long long)exit.VpContext.Rip);
+                      DumpBytes(ram, exit.VpContext.Rip);
                       return 0;
 
                   } else {
@@ -284,7 +335,7 @@ jobs:
 
               // 5. Send the screen to the app while the firmware runs.
               std::thread screen(ScreenLoop, static_cast<const uint8_t*>(ram));
-              int result = RunLoop(part);
+              int result = RunLoop(part, static_cast<const uint8_t*>(ram));
               g_running = false;
               screen.join();
 
