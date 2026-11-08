@@ -342,6 +342,17 @@ jobs:
                   LOG("[could not read registers]\n");
                   return;
               }
+              // The first eight stack slots (from RSP up). A RET jumps to the value at the top of the stack.
+              const UINT64 sp = v[4].Reg64;
+              if (sp + 64 <= RAM_SIZE) {
+                  LOG("[stack from RSP:");
+                  for (int i = 0; i < 8; ++i) {
+                      UINT64 slot = 0;
+                      std::memcpy(&slot, ram + sp + i * 8, 8);
+                      LOG(" %016llX", (unsigned long long)slot);
+                  }
+                  LOG("]\n");
+              }
               LOG("[rax %llX rcx %llX rsi %llX rdi %llX rsp %llX]\n",
                   (unsigned long long)v[0].Reg64, (unsigned long long)v[1].Reg64,
                   (unsigned long long)v[2].Reg64, (unsigned long long)v[3].Reg64,
