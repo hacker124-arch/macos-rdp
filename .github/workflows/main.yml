@@ -22,19 +22,28 @@ jobs:
         run: |
           @'
           // whpx_firmware.cpp
-          // Quantum VM milestone 2: load UEFI firmware (OVMF_CODE.fd + OVMF_VARS.fd) into a
-          // WHPX virtual machine, start the CPU at the firmware reset address, and handle the
-          // basic hardware ports. Anything the firmware needs that is not written yet is
-          // reported, so we know what to build next.
+          // Quantum VM engine: loads UEFI firmware (OVMF_CODE.fd + OVMF_VARS.fd) into a WHPX
+          // virtual machine, runs it from the firmware reset address, and sends the screen to
+          // the Quantum VM app.
+          //
+          // Output (stdout, binary): one frame after another. Each frame is:
+          //   "QVMF" (4 bytes), width (u32 little endian), height (u32 little endian),
+          //   then width * height * 4 bytes of pixels (BGRA, 32 bits per pixel).
+          // Log messages go to stderr.
           //
           // Build (x64 Native Tools Command Prompt for VS 2022):
           //   cl /EHsc /std:c++17 whpx_firmware.cpp WinHvPlatform.lib
-          // Run (put the two .fd files next to the .exe, or pass their paths):
+          // Run:
           //   whpx_firmware.exe OVMF_CODE.fd OVMF_VARS.fd
+          //   whpx_firmware.exe --test-pattern      (moving test picture, no VM)
 
           #include <windows.h>
           #include <WinHvPlatform.h>
+          #include <fcntl.h>
+          #include <io.h>
 
+          #include <atomic>
+          #include <chrono>
           #include <cstdint>
           #include <cstdio>
           #include <cstring>
@@ -42,19 +51,29 @@ jobs:
           #include <iterator>
           #include <set>
           #include <string>
+          #include <thread>
           #include <vector>
+
+          #define LOG(...) std::fprintf(stderr, __VA_ARGS__)
 
           #define CHECK(hr, what)                                                    \
               do {                                                                   \
                   HRESULT _h = (hr);                                                 \
                   if (FAILED(_h)) {                                                  \
-                      std::printf("%s failed: 0x%08lX\n", what, (unsigned long)_h); \
+                      LOG("%s failed: 0x%08lX\n", what, (unsigned long)_h);          \
                       return 1;                                                      \
                   }                                                                  \
               } while (0)
 
           static const UINT64 RAM_SIZE = 256ULL * 1024 * 1024;   // guest RAM at address 0
           static const UINT64 FOUR_GB = 0x100000000ULL;          // firmware ends at the top of 4 GB
+          static const UINT64 SCREEN_OFFSET = 0x0E000000ULL;     // where the screen lives in guest RAM
+          static const UINT32 SCREEN_W = 1024;
+          static const UINT32 SCREEN_H = 768;
+          static const size_t SCREEN_BYTES = static_cast<size_t>(SCREEN_W) * SCREEN_H * 4;
+          static const int FRAME_MS = 66;                        // about 15 frames per second
+
+          static std::atomic<bool> g_running{true};
 
           static bool ReadWholeFile(const std::string& path, std::vector<uint8_t>& out) {
               std::ifstream f(path, std::ios::binary);
@@ -72,29 +91,137 @@ jobs:
           // Values the firmware reads from ports we do not emulate yet.
           static UINT32 ReadPort(UINT16 port) {
               switch (port) {
-                  case 0x3FD: return 0x60;   // COM1 line status: transmitter empty and ready
-                  case 0x3FA: return 0x01;   // COM1 interrupt status: nothing pending
-                  default:    return 0xFFFFFFFF;  // "no device here" (reads back all ones)
+                  case 0x3FD: return 0x60;            // COM1 line status: transmitter empty and ready
+                  case 0x3FA: return 0x01;            // COM1 interrupt status: nothing pending
+                  default:    return 0xFFFFFFFF;      // "no device here" (reads back all ones)
+              }
+          }
+
+          static void PutU32(uint8_t* p, UINT32 v) {
+              p[0] = v & 0xFF;
+              p[1] = (v >> 8) & 0xFF;
+              p[2] = (v >> 16) & 0xFF;
+              p[3] = (v >> 24) & 0xFF;
+          }
+
+          // A frame is the header followed by the pixels. The header is written once.
+          static std::vector<uint8_t> MakeFrame() {
+              std::vector<uint8_t> frame(12 + SCREEN_BYTES, 0);
+              std::memcpy(frame.data(), "QVMF", 4);
+              PutU32(frame.data() + 4, SCREEN_W);
+              PutU32(frame.data() + 8, SCREEN_H);
+              return frame;
+          }
+
+          static void SendFrame(std::vector<uint8_t>& frame, const uint8_t* pixels) {
+              std::memcpy(frame.data() + 12, pixels, SCREEN_BYTES);
+              std::fwrite(frame.data(), 1, frame.size(), stdout);
+              std::fflush(stdout);
+          }
+
+          // Sends the screen from guest memory until the VM stops.
+          static void ScreenLoop(const uint8_t* ram) {
+              std::vector<uint8_t> frame = MakeFrame();
+              while (g_running) {
+                  SendFrame(frame, ram + SCREEN_OFFSET);
+                  std::this_thread::sleep_for(std::chrono::milliseconds(FRAME_MS));
+              }
+          }
+
+          // Test picture: a moving gradient, so the display can be checked without a VM.
+          static int TestPattern() {
+              std::vector<uint8_t> frame = MakeFrame();
+              std::vector<uint8_t> pixels(SCREEN_BYTES);
+              for (uint32_t t = 0;; ++t) {
+                  for (uint32_t y = 0; y < SCREEN_H; ++y) {
+                      for (uint32_t x = 0; x < SCREEN_W; ++x) {
+                          uint8_t* p = &pixels[(static_cast<size_t>(y) * SCREEN_W + x) * 4];
+                          p[0] = static_cast<uint8_t>(x);            // blue
+                          p[1] = static_cast<uint8_t>(y);            // green
+                          p[2] = static_cast<uint8_t>(x + t * 2);    // red
+                          p[3] = 0;
+                      }
+                  }
+                  SendFrame(frame, pixels.data());
+                  std::this_thread::sleep_for(std::chrono::milliseconds(FRAME_MS));
+              }
+              return 0;
+          }
+
+          // Runs the virtual CPU until the guest stops. Returns 0 on a normal stop, 1 on error.
+          static int RunLoop(WHV_PARTITION_HANDLE part) {
+              std::set<UINT16> unknownPorts;
+              LOG("Starting firmware...\n");
+              for (;;) {
+                  WHV_RUN_VP_EXIT_CONTEXT exit = {};
+                  CHECK(WHvRunVirtualProcessor(part, 0, &exit, sizeof(exit)), "WHvRunVirtualProcessor");
+
+                  if (exit.ExitReason == WHvRunVpExitReasonX64IoPortAccess) {
+                      const auto& io = exit.IoPortAccess;
+                      const UINT16 port = io.PortNumber;
+                      const UINT32 size = io.AccessInfo.AccessSize;   // 1, 2 or 4 bytes
+                      const UINT64 mask = size == 1 ? 0xFFULL : size == 2 ? 0xFFFFULL : 0xFFFFFFFFULL;
+
+                      if (io.AccessInfo.IsWrite) {
+                          if (port == 0x3F8) {
+                              std::fputc(static_cast<int>(io.Rax & 0xFF), stderr);   // serial output goes to the log
+                          } else if (port != 0x80 && unknownPorts.insert(port).second) {
+                              LOG("\n[note] write to unhandled port 0x%04X\n", port);
+                          }
+                      } else {
+                          UINT64 value = ReadPort(port);
+                          if (unknownPorts.insert(port).second && port != 0x3FD && port != 0x3FA)
+                              LOG("\n[note] read from unhandled port 0x%04X\n", port);
+                          UINT64 newRax = (io.Rax & ~mask) | (value & mask);
+                          CHECK(SetReg64(part, WHvX64RegisterRax, newRax), "set RAX");
+                      }
+
+                      // Move past the IN/OUT instruction so it is not run again.
+                      CHECK(SetReg64(part, WHvX64RegisterRip,
+                                     exit.VpContext.Rip + exit.VpContext.InstructionLength),
+                            "advance RIP");
+
+                  } else if (exit.ExitReason == WHvRunVpExitReasonMemoryAccess) {
+                      LOG("\n[stop] firmware accessed unmapped address 0x%llX at RIP 0x%llX\n",
+                          (unsigned long long)exit.MemoryAccess.Gpa,
+                          (unsigned long long)exit.VpContext.Rip);
+                      return 0;
+
+                  } else if (exit.ExitReason == WHvRunVpExitReasonX64Halt) {
+                      LOG("\n[guest halted at RIP 0x%llX]\n", (unsigned long long)exit.VpContext.Rip);
+                      return 0;
+
+                  } else {
+                      LOG("\n[stop] unexpected VM exit, reason %d, RIP 0x%llX\n",
+                          (int)exit.ExitReason, (unsigned long long)exit.VpContext.Rip);
+                      return 0;
+                  }
               }
           }
 
           int main(int argc, char** argv) {
+              // Frames are binary data on stdout. Log text goes to stderr, so the two never mix.
+              _setmode(_fileno(stdout), _O_BINARY);
+
+              if (argc > 1 && std::strcmp(argv[1], "--test-pattern") == 0)
+                  return TestPattern();
+
               std::string codePath = argc > 1 ? argv[1] : "OVMF_CODE.fd";
               std::string varsPath = argc > 2 ? argv[2] : "OVMF_VARS.fd";
 
               // 1. Load the firmware files.
               std::vector<uint8_t> code, vars;
-              if (!ReadWholeFile(codePath, code)) { std::printf("Cannot read %s\n", codePath.c_str()); return 1; }
-              if (!ReadWholeFile(varsPath, vars)) { std::printf("Cannot read %s\n", varsPath.c_str()); return 1; }
-              std::printf("Firmware code: %s (%zu bytes)\n", codePath.c_str(), code.size());
-              std::printf("Firmware vars: %s (%zu bytes)\n", varsPath.c_str(), vars.size());
+              if (!ReadWholeFile(codePath, code)) { LOG("Cannot read %s\n", codePath.c_str()); return 1; }
+              if (!ReadWholeFile(varsPath, vars)) { LOG("Cannot read %s\n", varsPath.c_str()); return 1; }
+              LOG("Firmware code: %s (%zu bytes)\n", codePath.c_str(), code.size());
+              LOG("Firmware vars: %s (%zu bytes)\n", varsPath.c_str(), vars.size());
 
               // The code image sits at the top of the first 4 GB, so its last byte is at 0xFFFFFFFF.
               // The variable store goes just below it.
               const UINT64 codeBase = FOUR_GB - code.size();
               const UINT64 varsBase = codeBase - vars.size();
-              std::printf("Code at 0x%llX, vars at 0x%llX\n",
-                          (unsigned long long)codeBase, (unsigned long long)varsBase);
+              LOG("Code at 0x%llX, vars at 0x%llX\n",
+                  (unsigned long long)codeBase, (unsigned long long)varsBase);
 
               // 2. Create the VM with one virtual CPU.
               WHV_PARTITION_HANDLE part = nullptr;
@@ -105,13 +232,12 @@ jobs:
                                             &cpus, sizeof(cpus)),
                     "set CPU count");
 
-              // Let Windows emulate the local APIC (the interrupt controller every x86 OS and
-              // firmware expects). If this fails on your Windows build, the program keeps going.
+              // Let Windows emulate the local APIC. If this fails, the program keeps going.
               WHV_X64_LOCAL_APIC_EMULATION_MODE apic = WHvX64LocalApicEmulationModeXApic;
               HRESULT apicHr = WHvSetPartitionProperty(part, WHvPartitionPropertyCodeLocalApicEmulationMode,
                                                        &apic, sizeof(apic));
               if (FAILED(apicHr))
-                  std::printf("Note: APIC emulation not enabled (0x%08lX)\n", (unsigned long)apicHr);
+                  LOG("Note: APIC emulation not enabled (0x%08lX)\n", (unsigned long)apicHr);
 
               CHECK(WHvSetupPartition(part), "WHvSetupPartition");
 
@@ -119,7 +245,7 @@ jobs:
               void* ram = VirtualAlloc(nullptr, RAM_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
               void* codeMem = VirtualAlloc(nullptr, code.size(), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
               void* varsMem = VirtualAlloc(nullptr, vars.size(), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-              if (!ram || !codeMem || !varsMem) { std::printf("VirtualAlloc failed\n"); return 1; }
+              if (!ram || !codeMem || !varsMem) { LOG("VirtualAlloc failed\n"); return 1; }
               std::memcpy(codeMem, code.data(), code.size());
               std::memcpy(varsMem, vars.data(), vars.size());
 
@@ -156,65 +282,18 @@ jobs:
               values[6].Reg64 = 0xFFF0;       // RIP: reset vector (CS base + RIP = 0xFFFFFFF0)
               CHECK(WHvSetVirtualProcessorRegisters(part, 0, names, 7, values), "set reset registers");
 
-              // 5. Run. Handle the port accesses the firmware makes. Stop on anything unknown.
-              std::set<UINT16> unknownPorts;
-              std::printf("Starting firmware...\n");
-              for (;;) {
-                  WHV_RUN_VP_EXIT_CONTEXT exit = {};
-                  CHECK(WHvRunVirtualProcessor(part, 0, &exit, sizeof(exit)), "WHvRunVirtualProcessor");
+              // 5. Send the screen to the app while the firmware runs.
+              std::thread screen(ScreenLoop, static_cast<const uint8_t*>(ram));
+              int result = RunLoop(part);
+              g_running = false;
+              screen.join();
 
-                  if (exit.ExitReason == WHvRunVpExitReasonX64IoPortAccess) {
-                      const auto& io = exit.IoPortAccess;
-                      const UINT16 port = io.PortNumber;
-                      const UINT32 size = io.AccessInfo.AccessSize;   // 1, 2 or 4 bytes
-                      const UINT64 mask = size == 1 ? 0xFFULL : size == 2 ? 0xFFFFULL : 0xFFFFFFFFULL;
-
-                      if (io.AccessInfo.IsWrite) {
-                          if (port == 0x3F8) {
-                              std::putchar(static_cast<int>(io.Rax & 0xFF));   // serial console output
-                          } else if (port != 0x80 && unknownPorts.insert(port).second) {
-                              std::printf("\n[note] write to unhandled port 0x%04X\n", port);
-                          }
-                      } else {
-                          UINT64 value = ReadPort(port);
-                          if (unknownPorts.insert(port).second && port != 0x3FD && port != 0x3FA)
-                              std::printf("\n[note] read from unhandled port 0x%04X\n", port);
-                          UINT64 newRax = (io.Rax & ~mask) | (value & mask);
-                          CHECK(SetReg64(part, WHvX64RegisterRax, newRax), "set RAX");
-                      }
-
-                      // Move past the IN/OUT instruction so it is not run again.
-                      CHECK(SetReg64(part, WHvX64RegisterRip,
-                                     exit.VpContext.Rip + exit.VpContext.InstructionLength),
-                            "advance RIP");
-
-                  } else if (exit.ExitReason == WHvRunVpExitReasonMemoryAccess) {
-                      // The firmware touched memory that no device answers yet (for example the
-                      // local APIC or a PCI device). This is the next thing to build.
-                      std::printf("\n[stop] firmware accessed unmapped address 0x%llX at RIP 0x%llX\n",
-                                  (unsigned long long)exit.MemoryAccess.Gpa,
-                                  (unsigned long long)exit.VpContext.Rip);
-                      break;
-
-                  } else if (exit.ExitReason == WHvRunVpExitReasonX64Halt) {
-                      std::printf("\n[guest halted at RIP 0x%llX]\n", (unsigned long long)exit.VpContext.Rip);
-                      break;
-
-                  } else {
-                      std::printf("\n[stop] unexpected VM exit, reason %d, RIP 0x%llX\n",
-                                  (int)exit.ExitReason, (unsigned long long)exit.VpContext.Rip);
-                      break;
-                  }
-              }
-
-              // 6. Clean up, then keep the window open so the output can be read.
+              // 6. Clean up.
               WHvDeletePartition(part);
               VirtualFree(ram, 0, MEM_RELEASE);
               VirtualFree(codeMem, 0, MEM_RELEASE);
               VirtualFree(varsMem, 0, MEM_RELEASE);
-              std::printf("\nPress Enter to close...");
-              std::getchar();
-              return 0;
+              return result;
           }
           '@ | Set-Content -Encoding ascii whpx_firmware.cpp
 
