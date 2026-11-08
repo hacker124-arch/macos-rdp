@@ -1,111 +1,238 @@
-name: Build Quantum VM firmware (UEFI with our logo)
+name: Build whpx_firmware.exe (Windows)
 
-# Builds open-source UEFI firmware (EDK2 / OVMF) with the Quantum VM logo on the
-# boot splash screen. Run it from Actions -> Build Quantum VM firmware -> Run workflow.
-# Download the "quantumvm-firmware" artifact: OVMF_CODE.fd and OVMF_VARS.fd.
+# Builds the Windows firmware loader. The source is inside this workflow,
+# so this single file is all you need in the repo.
+# Run it from Actions -> Build whpx_firmware.exe -> Run workflow.
+# Download the "whpx_firmware" artifact. Put whpx_firmware.exe next to
+# OVMF_CODE.fd and OVMF_VARS.fd, then run it on a PC with
+# "Windows Hypervisor Platform" turned on.
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main, master]
 
 jobs:
-  firmware:
-    name: Build UEFI firmware
-    runs-on: ubuntu-24.04
-    timeout-minutes: 120
+  build:
+    name: Compile whpx_firmware.exe
+    runs-on: windows-2022
     steps:
-      - name: Install build tools
+      - name: Write the source file
+        shell: pwsh
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential uuid-dev nasm acpica-tools \
-            python3 git librsvg2-bin imagemagick
+          @'
+          // whpx_firmware.cpp
+          // Quantum VM milestone 2: load UEFI firmware (OVMF_CODE.fd + OVMF_VARS.fd) into a
+          // WHPX virtual machine, start the CPU at the firmware reset address, and handle the
+          // basic hardware ports. Anything the firmware needs that is not written yet is
+          // reported, so we know what to build next.
+          //
+          // Build (x64 Native Tools Command Prompt for VS 2022):
+          //   cl /EHsc /std:c++17 whpx_firmware.cpp WinHvPlatform.lib
+          // Run (put the two .fd files next to the .exe, or pass their paths):
+          //   whpx_firmware.exe OVMF_CODE.fd OVMF_VARS.fd
 
-      - name: Get EDK2 (stable release)
-        run: |
-          git clone --depth 1 --branch edk2-stable202411 --recurse-submodules --shallow-submodules \
-            https://github.com/tianocore/edk2.git edk2
-          cd edk2 && git log -1 --oneline
+          #include <windows.h>
+          #include <WinHvPlatform.h>
 
-      - name: Write the Quantum VM logo
-        run: |
-          cat > quantum_vm_logo.svg <<'QVM_SVG'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
-            <defs>
-              <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-                <stop offset="0" stop-color="#2A1850"/>
-                <stop offset="1" stop-color="#120A1F"/>
-              </linearGradient>
-              <linearGradient id="chip" x1="0" y1="0" x2="1" y2="1">
-                <stop offset="0" stop-color="#C9A7FF"/>
-                <stop offset="1" stop-color="#9B5CFF"/>
-              </linearGradient>
-              <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
-                <stop offset="0" stop-color="#9B5CFF" stop-opacity="0.55"/>
-                <stop offset="1" stop-color="#9B5CFF" stop-opacity="0"/>
-              </radialGradient>
-            </defs>
+          #include <cstdint>
+          #include <cstdio>
+          #include <cstring>
+          #include <fstream>
+          #include <iterator>
+          #include <set>
+          #include <string>
+          #include <vector>
 
-            <!-- Rounded app background -->
-            <rect x="32" y="32" width="960" height="960" rx="220" fill="url(#bg)"/>
+          #define CHECK(hr, what)                                                    \
+              do {                                                                   \
+                  HRESULT _h = (hr);                                                 \
+                  if (FAILED(_h)) {                                                  \
+                      std::printf("%s failed: 0x%08lX\n", what, (unsigned long)_h); \
+                      return 1;                                                      \
+                  }                                                                  \
+              } while (0)
 
-            <!-- Soft glow behind the chip -->
-            <circle cx="512" cy="512" r="380" fill="url(#glow)"/>
+          static const UINT64 RAM_SIZE = 256ULL * 1024 * 1024;   // guest RAM at address 0
+          static const UINT64 FOUR_GB = 0x100000000ULL;          // firmware ends at the top of 4 GB
 
-            <!-- Chip pins (top, bottom, left, right) -->
-            <g stroke="#C9A7FF" stroke-width="28" stroke-linecap="round" opacity="0.9">
-              <line x1="400" y1="150" x2="400" y2="250"/>
-              <line x1="512" y1="150" x2="512" y2="250"/>
-              <line x1="624" y1="150" x2="624" y2="250"/>
-              <line x1="400" y1="774" x2="400" y2="874"/>
-              <line x1="512" y1="774" x2="512" y2="874"/>
-              <line x1="624" y1="774" x2="624" y2="874"/>
-              <line x1="150" y1="400" x2="250" y2="400"/>
-              <line x1="150" y1="512" x2="250" y2="512"/>
-              <line x1="150" y1="624" x2="250" y2="624"/>
-              <line x1="774" y1="400" x2="874" y2="400"/>
-              <line x1="774" y1="512" x2="874" y2="512"/>
-              <line x1="774" y1="624" x2="874" y2="624"/>
-            </g>
+          static bool ReadWholeFile(const std::string& path, std::vector<uint8_t>& out) {
+              std::ifstream f(path, std::ios::binary);
+              if (!f) return false;
+              out.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+              return !out.empty();
+          }
 
-            <!-- Chip body -->
-            <rect x="250" y="250" width="524" height="524" rx="88" fill="#1B0F33" stroke="url(#chip)" stroke-width="30"/>
+          static HRESULT SetReg64(WHV_PARTITION_HANDLE part, WHV_REGISTER_NAME name, UINT64 value) {
+              WHV_REGISTER_VALUE v = {};
+              v.Reg64 = value;
+              return WHvSetVirtualProcessorRegisters(part, 0, &name, 1, &v);
+          }
 
-            <!-- Inner core: a "Q" ring with a tail -->
-            <circle cx="500" cy="490" r="130" fill="none" stroke="url(#chip)" stroke-width="54"/>
-            <line x1="570" y1="560" x2="650" y2="640" stroke="url(#chip)" stroke-width="54" stroke-linecap="round"/>
+          // Values the firmware reads from ports we do not emulate yet.
+          static UINT32 ReadPort(UINT16 port) {
+              switch (port) {
+                  case 0x3FD: return 0x60;   // COM1 line status: transmitter empty and ready
+                  case 0x3FA: return 0x01;   // COM1 interrupt status: nothing pending
+                  default:    return 0xFFFFFFFF;  // "no device here" (reads back all ones)
+              }
+          }
 
-            <!-- Power dot -->
-            <circle cx="650" cy="650" r="0" fill="#6EE7A8"/>
-          </svg>
-          QVM_SVG
+          int main(int argc, char** argv) {
+              std::string codePath = argc > 1 ? argv[1] : "OVMF_CODE.fd";
+              std::string varsPath = argc > 2 ? argv[2] : "OVMF_VARS.fd";
 
-      - name: Replace the boot splash logo
-        run: |
-          set -e
-          LOGO_DIR=edk2/MdeModulePkg/Logo
-          test -d "$LOGO_DIR" || { echo "Logo folder not found in EDK2"; ls edk2/MdeModulePkg; exit 1; }
-          # 200x200 image on the same dark background as the app
-          rsvg-convert -w 200 -h 200 quantum_vm_logo.svg -o logo.png
-          convert logo.png -background '#120A1F' -flatten -type TrueColor BMP3:"$LOGO_DIR/Logo.bmp"
-          file "$LOGO_DIR/Logo.bmp"
+              // 1. Load the firmware files.
+              std::vector<uint8_t> code, vars;
+              if (!ReadWholeFile(codePath, code)) { std::printf("Cannot read %s\n", codePath.c_str()); return 1; }
+              if (!ReadWholeFile(varsPath, vars)) { std::printf("Cannot read %s\n", varsPath.c_str()); return 1; }
+              std::printf("Firmware code: %s (%zu bytes)\n", codePath.c_str(), code.size());
+              std::printf("Firmware vars: %s (%zu bytes)\n", varsPath.c_str(), vars.size());
 
-      - name: Build OVMF (x64 UEFI firmware)
-        working-directory: edk2
-        run: |
-          set -e
-          source edksetup.sh
-          make -C BaseTools -j"$(nproc)"
-          build -a X64 -t GCC5 -b RELEASE -p OvmfPkg/OvmfPkgX64.dsc -n "$(nproc)"
+              // The code image sits at the top of the first 4 GB, so its last byte is at 0xFFFFFFFF.
+              // The variable store goes just below it.
+              const UINT64 codeBase = FOUR_GB - code.size();
+              const UINT64 varsBase = codeBase - vars.size();
+              std::printf("Code at 0x%llX, vars at 0x%llX\n",
+                          (unsigned long long)codeBase, (unsigned long long)varsBase);
 
-      - name: Collect the firmware files
-        run: |
-          mkdir -p firmware-out
-          FV=edk2/Build/OvmfX64/RELEASE_GCC5/FV
-          cp "$FV/OVMF_CODE.fd" "$FV/OVMF_VARS.fd" firmware-out/
-          ls -la firmware-out
+              // 2. Create the VM with one virtual CPU.
+              WHV_PARTITION_HANDLE part = nullptr;
+              CHECK(WHvCreatePartition(&part), "WHvCreatePartition");
+
+              UINT32 cpus = 1;
+              CHECK(WHvSetPartitionProperty(part, WHvPartitionPropertyCodeProcessorCount,
+                                            &cpus, sizeof(cpus)),
+                    "set CPU count");
+
+              // Let Windows emulate the local APIC (the interrupt controller every x86 OS and
+              // firmware expects). If this fails on your Windows build, the program keeps going.
+              WHV_X64_LOCAL_APIC_EMULATION_MODE apic = WHvX64LocalApicEmulationModeXApic;
+              HRESULT apicHr = WHvSetPartitionProperty(part, WHvPartitionPropertyCodeLocalApicEmulationMode,
+                                                       &apic, sizeof(apic));
+              if (FAILED(apicHr))
+                  std::printf("Note: APIC emulation not enabled (0x%08lX)\n", (unsigned long)apicHr);
+
+              CHECK(WHvSetupPartition(part), "WHvSetupPartition");
+
+              // 3. Map memory: RAM, the firmware code (read + execute) and the variable store.
+              void* ram = VirtualAlloc(nullptr, RAM_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+              void* codeMem = VirtualAlloc(nullptr, code.size(), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+              void* varsMem = VirtualAlloc(nullptr, vars.size(), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+              if (!ram || !codeMem || !varsMem) { std::printf("VirtualAlloc failed\n"); return 1; }
+              std::memcpy(codeMem, code.data(), code.size());
+              std::memcpy(varsMem, vars.data(), vars.size());
+
+              const UINT32 rwx = WHvMapGpaRangeFlagRead | WHvMapGpaRangeFlagWrite | WHvMapGpaRangeFlagExecute;
+              const UINT32 rw  = WHvMapGpaRangeFlagRead | WHvMapGpaRangeFlagWrite;
+              CHECK(WHvMapGpaRange(part, ram, 0, RAM_SIZE, rwx), "map RAM");
+              CHECK(WHvMapGpaRange(part, codeMem, codeBase, code.size(), rwx), "map firmware code");
+              CHECK(WHvMapGpaRange(part, varsMem, varsBase, vars.size(), rw), "map firmware vars");
+
+              // 4. Create the CPU and start it at the x86 reset vector (0xFFFFFFF0),
+              //    in the same state a real PC uses after power-on.
+              CHECK(WHvCreateVirtualProcessor(part, 0, 0), "WHvCreateVirtualProcessor");
+
+              auto segment = [](UINT64 base, UINT16 selector, UINT16 attributes) {
+                  WHV_X64_SEGMENT_REGISTER s = {};
+                  s.Base = base;
+                  s.Limit = 0xFFFF;
+                  s.Selector = selector;
+                  s.Attributes = attributes;
+                  return s;
+              };
+
+              WHV_REGISTER_NAME names[] = {
+                  WHvX64RegisterCs, WHvX64RegisterDs, WHvX64RegisterEs, WHvX64RegisterSs,
+                  WHvX64RegisterCr0, WHvX64RegisterRflags, WHvX64RegisterRip,
+              };
+              WHV_REGISTER_VALUE values[7] = {};
+              values[0].Segment = segment(0xFFFF0000ULL, 0xF000, 0x9B);  // CS = reset segment
+              values[1].Segment = segment(0, 0, 0x93);                   // DS
+              values[2].Segment = segment(0, 0, 0x93);                   // ES
+              values[3].Segment = segment(0, 0, 0x93);                   // SS
+              values[4].Reg64 = 0x60000010;   // CR0: real mode, caches disabled (power-on state)
+              values[5].Reg64 = 0x2;          // RFLAGS
+              values[6].Reg64 = 0xFFF0;       // RIP: reset vector (CS base + RIP = 0xFFFFFFF0)
+              CHECK(WHvSetVirtualProcessorRegisters(part, 0, names, 7, values), "set reset registers");
+
+              // 5. Run. Handle the port accesses the firmware makes. Stop on anything unknown.
+              std::set<UINT16> unknownPorts;
+              std::printf("Starting firmware...\n");
+              for (;;) {
+                  WHV_RUN_VP_EXIT_CONTEXT exit = {};
+                  CHECK(WHvRunVirtualProcessor(part, 0, &exit, sizeof(exit)), "WHvRunVirtualProcessor");
+
+                  if (exit.ExitReason == WHvRunVpExitReasonX64IoPortAccess) {
+                      const auto& io = exit.IoPortAccess;
+                      const UINT16 port = io.PortNumber;
+                      const UINT32 size = io.AccessInfo.AccessSize;   // 1, 2 or 4 bytes
+                      const UINT64 mask = size == 1 ? 0xFFULL : size == 2 ? 0xFFFFULL : 0xFFFFFFFFULL;
+
+                      if (io.AccessInfo.IsWrite) {
+                          if (port == 0x3F8) {
+                              std::putchar(static_cast<int>(io.Rax & 0xFF));   // serial console output
+                          } else if (port != 0x80 && unknownPorts.insert(port).second) {
+                              std::printf("\n[note] write to unhandled port 0x%04X\n", port);
+                          }
+                      } else {
+                          UINT64 value = ReadPort(port);
+                          if (unknownPorts.insert(port).second && port != 0x3FD && port != 0x3FA)
+                              std::printf("\n[note] read from unhandled port 0x%04X\n", port);
+                          UINT64 newRax = (io.Rax & ~mask) | (value & mask);
+                          CHECK(SetReg64(part, WHvX64RegisterRax, newRax), "set RAX");
+                      }
+
+                      // Move past the IN/OUT instruction so it is not run again.
+                      CHECK(SetReg64(part, WHvX64RegisterRip,
+                                     exit.VpContext.Rip + exit.VpContext.InstructionLength),
+                            "advance RIP");
+
+                  } else if (exit.ExitReason == WHvRunVpExitReasonMemoryAccess) {
+                      // The firmware touched memory that no device answers yet (for example the
+                      // local APIC or a PCI device). This is the next thing to build.
+                      std::printf("\n[stop] firmware accessed unmapped address 0x%llX at RIP 0x%llX\n",
+                                  (unsigned long long)exit.MemoryAccess.Gpa,
+                                  (unsigned long long)exit.VpContext.Rip);
+                      break;
+
+                  } else if (exit.ExitReason == WHvRunVpExitReasonX64Halt) {
+                      std::printf("\n[guest halted at RIP 0x%llX]\n", (unsigned long long)exit.VpContext.Rip);
+                      break;
+
+                  } else {
+                      std::printf("\n[stop] unexpected VM exit, reason %d, RIP 0x%llX\n",
+                                  (int)exit.ExitReason, (unsigned long long)exit.VpContext.Rip);
+                      break;
+                  }
+              }
+
+              // 6. Clean up, then keep the window open so the output can be read.
+              WHvDeletePartition(part);
+              VirtualFree(ram, 0, MEM_RELEASE);
+              VirtualFree(codeMem, 0, MEM_RELEASE);
+              VirtualFree(varsMem, 0, MEM_RELEASE);
+              std::printf("\nPress Enter to close...");
+              std::getchar();
+              return 0;
+          }
+          '@ | Set-Content -Encoding ascii whpx_firmware.cpp
+
+      - name: Set up the Visual C++ compiler
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Compile
+        shell: cmd
+        run: cl /EHsc /std:c++17 whpx_firmware.cpp WinHvPlatform.lib /Fe:whpx_firmware.exe
+
+      - name: Show the file
+        shell: pwsh
+        run: Get-Item whpx_firmware.exe | Format-List Name, Length
 
       - uses: actions/upload-artifact@v4
         with:
-          name: quantumvm-firmware
-          path: firmware-out
+          name: whpx_firmware
+          path: whpx_firmware.exe
           if-no-files-found: error
