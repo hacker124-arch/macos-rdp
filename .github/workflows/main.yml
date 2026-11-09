@@ -563,6 +563,20 @@ jobs:
               LOG("Firmware code: %s (%zu bytes)\n", codePath.c_str(), code.size());
               LOG("Firmware vars: %s (%zu bytes)\n", varsPath.c_str(), vars.size());
 
+              // WHPX maps memory in whole 4 KB pages. Pad the front of the code image with zeros so its
+              // size is a multiple of 4 KB. It still ends at the top of the first 4 GB, so the reset vector
+              // stays where the firmware expects it.
+              const size_t kPage = 4096;
+              const size_t codePad = (kPage - (code.size() % kPage)) % kPage;
+              if (codePad) {
+                  code.insert(code.begin(), codePad, 0);
+                  LOG("Padded firmware code by %zu bytes to %zu bytes (4 KB pages)\n", codePad, code.size());
+              }
+              if (vars.size() % kPage) {
+                  LOG("Firmware vars size %zu is not a multiple of 4 KB\n", vars.size());
+                  return 1;
+              }
+
               // The code image sits at the top of the first 4 GB, so its last byte is at 0xFFFFFFFF.
               // The variable store goes just below it.
               const UINT64 codeBase = FOUR_GB - code.size();
