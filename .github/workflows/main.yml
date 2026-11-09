@@ -375,6 +375,10 @@ jobs:
               DumpPaging(ram, v[6].Reg64, v[10].Reg64);
           }
 
+          // Every port access is logged (port, size, value, RIP), up to this many lines.
+          static int g_ioLogged = 0;
+          static const int kIoLogLimit = 2000;
+
           // Prints the 16 bytes of guest memory at an address, so we can see the code that stopped.
           static void DumpBytes(const uint8_t* ram, UINT64 address) {
               if (address + 16 > RAM_SIZE) {
@@ -422,6 +426,16 @@ jobs:
                       const UINT16 port = io.PortNumber;
                       const UINT32 size = io.AccessInfo.AccessSize;   // 1, 2 or 4 bytes
                       const UINT64 mask = size == 1 ? 0xFFULL : size == 2 ? 0xFFFFULL : 0xFFFFFFFFULL;
+
+                      if (g_ioLogged < kIoLogLimit) {
+                          ++g_ioLogged;
+                          if (io.AccessInfo.IsWrite)
+                              LOG("[io] out port 0x%04X size %u value 0x%llX RIP 0x%llX\n", port, size,
+                                  (unsigned long long)(io.Rax & mask), (unsigned long long)exit.VpContext.Rip);
+                          else
+                              LOG("[io] in  port 0x%04X size %u RIP 0x%llX\n", port, size,
+                                  (unsigned long long)exit.VpContext.Rip);
+                      }
 
                       if (io.AccessInfo.IsWrite) {
                           const UINT32 value = static_cast<UINT32>(io.Rax & mask);
@@ -473,6 +487,8 @@ jobs:
                               port != 0xCF8 && !(port >= 0xCFC && port <= 0xCFF) &&
                               port != 0x1CE && port != 0x1CF && unknownPorts.insert(port).second)
                               LOG("\n[note] read from unhandled port 0x%04X\n", port);
+                          if (g_ioLogged <= kIoLogLimit)
+                              LOG("[io]      -> 0x%llX\n", (unsigned long long)(value & mask));
                           UINT64 newRax = (io.Rax & ~mask) | (value & mask);
                           CHECK(SetReg64(part, WHvX64RegisterRax, newRax), "set RAX");
                       }
