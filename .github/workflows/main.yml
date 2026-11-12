@@ -99,7 +99,7 @@ jobs:
       - name: Install QEMU
         run: |
           sudo apt-get update
-          sudo apt-get install -y qemu-system-x86 qemu-utils
+          sudo apt-get install -y qemu-system-x86 qemu-utils novnc websockify
 
       - name: Start VM with the ISO (VNC on :5900)
         run: |
@@ -111,10 +111,16 @@ jobs:
             -cdrom my.iso -boot d \
             -vga std -device qemu-xhci -device usb-tablet \
             -netdev user,id=n0 -device virtio-net-pci,netdev=n0 \
-            -vnc 0.0.0.0:0 \
+            -vnc 127.0.0.1:0 \
             -daemonize
           sleep 3
           ss -ltnp | grep 5900
+
+          # noVNC: browser-based viewer on port 6080 (proxies to QEMU's VNC)
+          sudo ln -sf /usr/share/novnc/vnc.html /usr/share/novnc/index.html
+          nohup websockify --web /usr/share/novnc 6080 127.0.0.1:5900 > websockify.log 2>&1 &
+          sleep 2
+          ss -ltnp | grep 6080
 
       - name: Join Tailscale
         env:
@@ -123,8 +129,9 @@ jobs:
           curl -fsSL https://tailscale.com/install.sh | sh
           sudo tailscale up --authkey="$TS_AUTHKEY" --hostname=gh-vnc-vm --accept-dns=false
           echo "=================================================="
-          echo "Connect your VNC client to: $(tailscale ip -4):5900"
-          echo "(or gh-vnc-vm:5900 with MagicDNS)"
+          echo "Open this in your browser (Tailscale must be running on your PC):"
+          echo "http://$(tailscale ip -4):6080/vnc.html?autoconnect=true&resize=scale"
+          echo "(or http://gh-vnc-vm:6080/vnc.html?autoconnect=true with MagicDNS)"
           echo "=================================================="
 
       - name: Keep alive
