@@ -5,7 +5,7 @@ name: vnc-vm
 # You can also leave it and paste a link when you click "Run workflow"
 # ============================================================
 env:
-  ISO_URL: "https://iso.pearos.xyz/iso/pearOS-NiceC0re-2026.11-x86_64.iso"
+  ISO_URL: "https://iso.pearos.xyz/iso/pearOS-NiceC0re-2026.11-x86_64.iso?exp=1794490996&sig=01d6b5e0a06b2f7d082ab348f909b646f716e7b1d78e8efd0a46ae7c433a97dc&tier=free"
 
 on:
   workflow_dispatch:
