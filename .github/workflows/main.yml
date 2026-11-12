@@ -1,134 +1,106 @@
-name: vnc-vm
-
-# ============================================================
-# PASTE YOUR DIRECT ISO DOWNLOAD LINK HERE (between the quotes)
-# You can also leave it and paste a link when you click "Run workflow"
-# ============================================================
-env:
-  ISO_URL: "PASTE_DIRECT_ISO_LINK_HERE"
+name: Build Quantum SMP world
 
 on:
   workflow_dispatch:
     inputs:
-      iso_url:
-        description: "Optional: ISO link (overrides the one in the file)"
-        required: false
-      runner:
-        description: "Runner label. Use the name of your large runner (e.g. 16-core) to actually get 12 cores / 32GB"
-        default: "ubuntu-latest"
-      ram_mb:
-        description: "VM RAM in MB"
-        default: "32768"
-      cpus:
-        description: "VM CPU count"
-        default: "12"
-      disk_gb:
-        description: "VM disk size in GB (virtual, grows as used)"
-        default: "1024"
-      minutes:
-        description: "How long to keep the session alive (max ~350)"
-        default: "120"
+      accept_eula:
+        description: "I agree to the Minecraft EULA (https://aka.ms/MinecraftEULA)"
+        type: boolean
+        default: false
+      mc_version:
+        description: "Minecraft / Paper version"
+        type: string
+        default: "26.3"
+      seed:
+        description: "World seed (leave empty for random)"
+        type: string
+        default: ""
+      build_logo:
+        description: "Build the purple cube logo at the origin"
+        type: boolean
+        default: true
 
 jobs:
-  vm:
-    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
-    timeout-minutes: 355
+  build-world:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - name: Download ISO (first step)
-        env:
-          URL: ${{ inputs.iso_url || env.ISO_URL }}
+      - name: Check EULA
         run: |
-          if [ -z "$URL" ] || [ "$URL" = "PASTE_DIRECT_ISO_LINK_HERE" ]; then
-            echo "No ISO link set. Edit ISO_URL at the top of the file or paste one when running the workflow."
+          if [ "${{ inputs.accept_eula }}" != "true" ]; then
+            echo "You must tick the EULA box to generate a world."
             exit 1
           fi
-          echo "Downloading ISO with 16 parallel connections..."
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq aria2
-          aria2c \
-            --max-connection-per-server=16 \
-            --split=16 \
-            --min-split-size=1M \
-            --max-concurrent-downloads=1 \
-            --file-allocation=none \
-            --summary-interval=5 \
-            --console-log-level=warn \
-            --retry-wait=3 --max-tries=5 \
-            --allow-overwrite=true \
-            -o my.iso "$URL" \
-          || { echo "aria2 failed, falling back to curl"; curl -fL --retry 3 -o my.iso "$URL"; }
-          ls -lh my.iso
 
-      - name: Free up disk space
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+
+      - name: Download Paper
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
-          df -h /
+          mkdir server && cd server
+          API="https://fill.papermc.io/v3/projects/paper/versions/${{ inputs.mc_version }}/builds/latest"
+          URL=$(curl -fsSL "$API" | jq -r '.downloads["server:default"].url')
+          echo "Downloading $URL"
+          curl -fsSL "$URL" -o paper.jar
 
-      - name: Fit VM to what the runner really has
+      - name: Write config
+        working-directory: server
         run: |
-          REQ_CPUS=${{ inputs.cpus }}
-          REQ_RAM=${{ inputs.ram_mb }}
-          REQ_DISK=${{ inputs.disk_gb }}
+          echo "eula=true" > eula.txt
+          cat > server.properties <<PROPS
+          level-name=quantum_smp
+          level-seed=${{ inputs.seed }}
+          online-mode=true
+          view-distance=6
+          simulation-distance=4
+          max-tick-time=-1
+          PROPS
+          sed -i 's/^ *//' server.properties
 
-          AVAIL_CPUS=$(nproc)
-          AVAIL_RAM=$(( $(free -m | awk '/Mem:/{print $2}') - 1536 ))
-          AVAIL_DISK=$(( $(df --output=avail -BG / | tail -1 | tr -dc '0-9') - 3 ))
+      - name: Generate world (and build logo)
+        working-directory: server
+        run: |
+          mkfifo in
+          sleep infinity > in &
+          java -Xmx4G -jar paper.jar --nogui < in > server.log 2>&1 &
+          JAVA_PID=$!
 
-          CPUS=$(( REQ_CPUS < AVAIL_CPUS ? REQ_CPUS : AVAIL_CPUS ))
-          RAM=$(( REQ_RAM < AVAIL_RAM ? REQ_RAM : AVAIL_RAM ))
-          DISK=$(( REQ_DISK < AVAIL_DISK ? REQ_DISK : AVAIL_DISK ))
+          for i in $(seq 1 180); do
+            grep -q 'Done (' server.log && break
+            sleep 2
+          done
+          grep -q 'Done (' server.log || { cat server.log; exit 1; }
 
-          echo "Requested: ${REQ_CPUS} cores, ${REQ_RAM} MB RAM, ${REQ_DISK} GB disk"
-          echo "Runner can give: ${AVAIL_CPUS} cores, ${AVAIL_RAM} MB RAM, ${AVAIL_DISK} GB disk"
-          echo "Using:     ${CPUS} cores, ${RAM} MB RAM, ${DISK} GB disk"
-          if [ "$CPUS" -lt "$REQ_CPUS" ] || [ "$RAM" -lt "$REQ_RAM" ] || [ "$DISK" -lt "$REQ_DISK" ]; then
-            echo "::warning::Runner is smaller than requested, so the VM was scaled down. Use a larger runner for more."
+          send() { echo "$1" > in; sleep 3; }
+
+          if [ "${{ inputs.build_logo }}" = "true" ]; then
+            send "forceload add 0 0 20 20"
+            sleep 10
+            P="execute in minecraft:overworld positioned 0 0 0 positioned over world_surface run"
+            send "$P fill ~ ~ ~ ~14 ~14 ~14 minecraft:purple_concrete hollow"
+            send "$P fill ~ ~14 ~ ~14 ~14 ~14 minecraft:magenta_concrete"
+            for E in \
+              "~ ~ ~ ~14 ~ ~" "~ ~ ~14 ~14 ~ ~14" "~ ~ ~ ~ ~ ~14" "~14 ~ ~ ~14 ~ ~14" \
+              "~ ~14 ~ ~14 ~14 ~" "~ ~14 ~14 ~14 ~14 ~14" "~ ~14 ~ ~ ~14 ~14" "~14 ~14 ~ ~14 ~14 ~14" \
+              "~ ~ ~ ~ ~14 ~" "~14 ~ ~ ~14 ~14 ~" "~ ~ ~14 ~ ~14 ~14" "~14 ~ ~14 ~14 ~14 ~14"
+            do
+              send "$P fill $E minecraft:crying_obsidian"
+            done
+            send "$P setblock ~7 ~7 ~7 minecraft:sea_lantern"
+            send "$P fill ~6 ~1 ~14 ~8 ~3 ~14 minecraft:air"
+            send "$P setworldspawn ~7 ~ ~18"
           fi
 
-          echo "VM_CPUS=$CPUS" >> "$GITHUB_ENV"
-          echo "VM_RAM=$RAM" >> "$GITHUB_ENV"
-          echo "VM_DISK=$DISK" >> "$GITHUB_ENV"
+          send "save-all flush"
+          echo "stop" > in
+          wait $JAVA_PID || true
+          kill %1 2>/dev/null || true
+          tail -n 30 server.log
 
-      - name: Enable KVM
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-          ls -l /dev/kvm
-
-      - name: Install QEMU
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y qemu-system-x86 qemu-utils
-
-      - name: Start VM with the ISO (VNC on :5900)
-        run: |
-          qemu-img create -f qcow2 disk.qcow2 ${VM_DISK}G
-          qemu-system-x86_64 \
-            -enable-kvm -cpu host \
-            -m ${VM_RAM} -smp ${VM_CPUS} \
-            -drive file=disk.qcow2,format=qcow2,if=virtio \
-            -cdrom my.iso -boot d \
-            -vga std -device qemu-xhci -device usb-tablet \
-            -netdev user,id=n0 -device virtio-net-pci,netdev=n0 \
-            -vnc 0.0.0.0:0 \
-            -daemonize
-          sleep 3
-          ss -ltnp | grep 5900
-
-      - name: Join Tailscale
-        env:
-          TS_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
-        run: |
-          curl -fsSL https://tailscale.com/install.sh | sh
-          sudo tailscale up --authkey="$TS_AUTHKEY" --hostname=gh-vnc-vm --accept-dns=false
-          tailscale status
-          echo "=================================================="
-          echo "Connect your VNC client to: $(tailscale ip -4):5900"
-          echo "(or gh-vnc-vm:5900 with MagicDNS)"
-          echo "=================================================="
-
-      - name: Keep alive
-        run: |
-          echo "Sleeping for ${{ inputs.minutes }} minutes..."
-          sleep $(( ${{ inputs.minutes }} * 60 ))
+      - name: Upload world
+        uses: actions/upload-artifact@v4
+        with:
+          name: quantum_smp-world
+          path: server/quantum_smp
