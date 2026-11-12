@@ -5,7 +5,7 @@ name: vnc-vm
 # You can also leave it and paste a link when you click "Run workflow"
 # ============================================================
 env:
-  ISO_URL: "https://iso.pearos.xyz/iso/pearOS-NiceC0re-2026.11-x86_64.iso?exp=1794490996&sig=01d6b5e0a06b2f7d082ab348f909b646f716e7b1d78e8efd0a46ae7c433a97dc&tier=free"
+  ISO_URL: "PASTE_DIRECT_ISO_LINK_HERE"
 
 on:
   workflow_dispatch:
@@ -99,7 +99,7 @@ jobs:
       - name: Install QEMU
         run: |
           sudo apt-get update
-          sudo apt-get install -y qemu-system-x86 qemu-utils novnc websockify
+          sudo apt-get install -y qemu-system-x86 qemu-utils
 
       - name: Start VM with the ISO (VNC on :5900)
         run: |
@@ -111,16 +111,10 @@ jobs:
             -cdrom my.iso -boot d \
             -vga std -device qemu-xhci -device usb-tablet \
             -netdev user,id=n0 -device virtio-net-pci,netdev=n0 \
-            -vnc 127.0.0.1:0 \
+            -vnc 0.0.0.0:0 \
             -daemonize
           sleep 3
           ss -ltnp | grep 5900
-
-          # noVNC: browser-based viewer on port 6080 (proxies to QEMU's VNC)
-          sudo ln -sf /usr/share/novnc/vnc.html /usr/share/novnc/index.html
-          nohup websockify --web /usr/share/novnc 6080 127.0.0.1:5900 > websockify.log 2>&1 &
-          sleep 2
-          ss -ltnp | grep 6080
 
       - name: Join Tailscale
         env:
@@ -128,10 +122,10 @@ jobs:
         run: |
           curl -fsSL https://tailscale.com/install.sh | sh
           sudo tailscale up --authkey="$TS_AUTHKEY" --hostname=gh-vnc-vm --accept-dns=false
+          tailscale status
           echo "=================================================="
-          echo "Open this in your browser (Tailscale must be running on your PC):"
-          echo "http://$(tailscale ip -4):6080/vnc.html?autoconnect=true&resize=scale"
-          echo "(or http://gh-vnc-vm:6080/vnc.html?autoconnect=true with MagicDNS)"
+          echo "Connect your VNC client to: $(tailscale ip -4):5900"
+          echo "(or gh-vnc-vm:5900 with MagicDNS)"
           echo "=================================================="
 
       - name: Keep alive
