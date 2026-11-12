@@ -42,8 +42,21 @@ jobs:
             echo "No ISO link set. Edit ISO_URL at the top of the file or paste one when running the workflow."
             exit 1
           fi
-          echo "Downloading ISO..."
-          curl -fL --retry 3 -o my.iso "$URL"
+          echo "Downloading ISO with 16 parallel connections..."
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq aria2
+          aria2c \
+            --max-connection-per-server=16 \
+            --split=16 \
+            --min-split-size=1M \
+            --max-concurrent-downloads=1 \
+            --file-allocation=none \
+            --summary-interval=5 \
+            --console-log-level=warn \
+            --retry-wait=3 --max-tries=5 \
+            --allow-overwrite=true \
+            -o my.iso "$URL" \
+          || { echo "aria2 failed, falling back to curl"; curl -fL --retry 3 -o my.iso "$URL"; }
           ls -lh my.iso
 
       - name: Check runner resources
