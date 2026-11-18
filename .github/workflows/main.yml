@@ -34,13 +34,13 @@ jobs:
         run: |
           echo "Starting build process for Quantum VM engine components..."
           
-          # Create a build output directory
+          # Create your build output directory
           mkdir -p build_output
           
-          # If you have a custom makefile, script, or rust/C project, compile it here:
-          # Example: g++ -O3 src/engine.cpp -o build_output/quantum_engine
+          # Create a build marker file (Replace this with your actual compiler/firmware build commands)
+          echo "Quantum VM Engine v1.0 Build Success" > build_output/version.txt
           
-          # Copy your existing static assets into the artifact staging folder if needed
+          # Copy your existing static assets if the folder exists in your repo
           if [ -d "Quantum VM windows" ]; then
             cp -r "Quantum VM windows"/* build_output/
           fi
