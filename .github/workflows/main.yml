@@ -1,106 +1,55 @@
-name: Build Quantum SMP world
+name: Build VM Engine and Firmware
 
 on:
+  push:
+  pull_request:
   workflow_dispatch:
-    inputs:
-      accept_eula:
-        description: "I agree to the Minecraft EULA (https://aka.ms/MinecraftEULA)"
-        type: boolean
-        default: false
-      mc_version:
-        description: "Minecraft / Paper version"
-        type: string
-        default: "26.3"
-      seed:
-        description: "World seed (leave empty for random)"
-        type: string
-        default: ""
-      build_logo:
-        description: "Build the purple cube logo at the origin"
-        type: boolean
-        default: true
 
 jobs:
-  build-world:
+  build-engine:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+
     steps:
-      - name: Check EULA
-        run: |
-          if [ "${{ inputs.accept_eula }}" != "true" ]; then
-            echo "You must tick the EULA box to generate a world."
-            exit 1
-          fi
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-java@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          distribution: temurin
-          java-version: "25"
+          python-version: '3.11'
 
-      - name: Download Paper
+      - name: Install Build Dependencies
         run: |
-          mkdir server && cd server
-          API="https://fill.papermc.io/v3/projects/paper/versions/${{ inputs.mc_version }}/builds/latest"
-          URL=$(curl -fsSL "$API" | jq -r '.downloads["server:default"].url')
-          echo "Downloading $URL"
-          curl -fsSL "$URL" -o paper.jar
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            uuid-dev \
+            iasl \
+            git \
+            nasm \
+            gcc-multilib \
+            g++-multilib
 
-      - name: Write config
-        working-directory: server
+      - name: Build or Prepare Firmware / Engine
         run: |
-          echo "eula=true" > eula.txt
-          cat > server.properties <<PROPS
-          level-name=quantum_smp
-          level-seed=${{ inputs.seed }}
-          online-mode=true
-          view-distance=6
-          simulation-distance=4
-          max-tick-time=-1
-          PROPS
-          sed -i 's/^ *//' server.properties
-
-      - name: Generate world (and build logo)
-        working-directory: server
-        run: |
-          mkfifo in
-          sleep infinity > in &
-          java -Xmx4G -jar paper.jar --nogui < in > server.log 2>&1 &
-          JAVA_PID=$!
-
-          for i in $(seq 1 180); do
-            grep -q 'Done (' server.log && break
-            sleep 2
-          done
-          grep -q 'Done (' server.log || { cat server.log; exit 1; }
-
-          send() { echo "$1" > in; sleep 3; }
-
-          if [ "${{ inputs.build_logo }}" = "true" ]; then
-            send "forceload add 0 0 20 20"
-            sleep 10
-            P="execute in minecraft:overworld positioned 0 0 0 positioned over world_surface run"
-            send "$P fill ~ ~ ~ ~14 ~14 ~14 minecraft:purple_concrete hollow"
-            send "$P fill ~ ~14 ~ ~14 ~14 ~14 minecraft:magenta_concrete"
-            for E in \
-              "~ ~ ~ ~14 ~ ~" "~ ~ ~14 ~14 ~ ~14" "~ ~ ~ ~ ~ ~14" "~14 ~ ~ ~14 ~ ~14" \
-              "~ ~14 ~ ~14 ~14 ~" "~ ~14 ~14 ~14 ~14 ~14" "~ ~14 ~ ~ ~14 ~14" "~14 ~14 ~ ~14 ~14 ~14" \
-              "~ ~ ~ ~ ~14 ~" "~14 ~ ~ ~14 ~14 ~" "~ ~ ~14 ~ ~14 ~14" "~14 ~ ~14 ~14 ~14 ~14"
-            do
-              send "$P fill $E minecraft:crying_obsidian"
-            done
-            send "$P setblock ~7 ~7 ~7 minecraft:sea_lantern"
-            send "$P fill ~6 ~1 ~14 ~8 ~3 ~14 minecraft:air"
-            send "$P setworldspawn ~7 ~ ~18"
+          echo "Starting build process for Quantum VM engine components..."
+          
+          # Create a build output directory
+          mkdir -p build_output
+          
+          # If you have a custom makefile, script, or rust/C project, compile it here:
+          # Example: g++ -O3 src/engine.cpp -o build_output/quantum_engine
+          
+          # Copy your existing static assets into the artifact staging folder if needed
+          if [ -d "Quantum VM windows" ]; then
+            cp -r "Quantum VM windows"/* build_output/
           fi
+          
+          ls -la build_output
 
-          send "save-all flush"
-          echo "stop" > in
-          wait $JAVA_PID || true
-          kill %1 2>/dev/null || true
-          tail -n 30 server.log
-
-      - name: Upload world
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: quantum_smp-world
-          path: server/quantum_smp
+          name: Quantum-VM-Engine-Artifacts
+          path: build_output/
+          retention-days: 30
