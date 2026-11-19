@@ -1,55 +1,32 @@
-name: Build VM Engine and Firmware
+name: Build Windows EXE
 
 on:
   push:
-  pull_request:
+    tags: ["v*"]
   workflow_dispatch:
 
 jobs:
-  build-engine:
-    runs-on: ubuntu-latest
-
+  build:
+    runs-on: windows-latest
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-node@v4
         with:
-          python-version: '3.11'
+          node-version: 20
+          cache: npm
 
-      - name: Install Build Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            uuid-dev \
-            iasl \
-            git \
-            nasm \
-            gcc-multilib \
-            g++-multilib
+      - run: npm ci
 
-      - name: Build or Prepare Firmware / Engine
-        run: |
-          echo "Starting build process for Quantum VM engine components..."
-          
-          # Create your build output directory
-          mkdir -p build_output
-          
-          # Create a build marker file (Replace this with your actual compiler/firmware build commands)
-          echo "Quantum VM Engine v1.0 Build Success" > build_output/version.txt
-          
-          # Copy your existing static assets if the folder exists in your repo
-          if [ -d "Quantum VM windows" ]; then
-            cp -r "Quantum VM windows"/* build_output/
-          fi
-          
-          ls -la build_output
+      - run: npx electron-builder --win --publish never
 
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: Quantum-VM-Engine-Artifacts
-          path: build_output/
-          retention-days: 30
+          name: windows-installer
+          path: dist/*.exe
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.exe
