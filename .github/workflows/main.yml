@@ -20,10 +20,15 @@ jobs:
           install: mingw-w64-ucrt-x86_64-gcc
 
       - name: Build qvm_soft.exe
-        working-directory: qvm_soft_src
-        run: g++ -std=c++17 -O2 -Wall -Wextra -o qvm_soft.exe main.cpp cpu.cpp cpu_ext.cpp devices.cpp board.cpp
+        run: |
+          # Find the folder that holds the engine source (the one with cpu_ext.cpp).
+          SRC=$(dirname "$(find . -name cpu_ext.cpp -not -path './.git/*' | head -n 1)")
+          echo "Engine source folder: $SRC"
+          cd "$SRC"
+          g++ -std=c++17 -O2 -Wall -Wextra -static -o qvm_soft.exe main.cpp cpu.cpp cpu_ext.cpp devices.cpp board.cpp
 
       - uses: actions/upload-artifact@v4
         with:
           name: qvm_soft
-          path: qvm_soft_src/qvm_soft.exe
+          path: '**/qvm_soft.exe'
+        
