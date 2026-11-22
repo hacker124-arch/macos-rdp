@@ -1,33 +1,919 @@
-name: Build qvm_soft.exe
-
+name: Build Moshify APK
 on:
   push:
+    branches: [main, master]
   workflow_dispatch:
-
 jobs:
   build:
-    runs-on: windows-latest
-    defaults:
-      run:
-        shell: msys2 {0}
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: msys2/setup-msys2@v2
+      - uses: actions/setup-java@v4
         with:
-          msystem: UCRT64
-          update: true
-          install: mingw-w64-ucrt-x86_64-gcc
-
-      - name: Build qvm_soft.exe
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.14.3'
+      - name: Write project files
         run: |
-          # Find the folder that holds the engine source (the one with cpu_ext.cpp).
-          SRC=$(dirname "$(find . -name cpu_ext.cpp -not -path './.git/*' | head -n 1)")
-          echo "Engine source folder: $SRC"
-          cd "$SRC"
-          g++ -std=c++17 -O2 -Wall -Wextra -static -o qvm_soft.exe main.cpp cpu.cpp cpu_ext.cpp devices.cpp board.cpp fwcfg.cpp
+          set -e
+          mkdir -p $(dirname settings.gradle)
+          cat > settings.gradle <<'MOSHIFY_FILE_0'
+          pluginManagement {
+              repositories { google(); mavenCentral(); gradlePluginPortal() }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories { google(); mavenCentral() }
+          }
+          rootProject.name = 'Moshify'
+          include ':app'
+          MOSHIFY_FILE_0
+          mkdir -p $(dirname build.gradle)
+          cat > build.gradle <<'MOSHIFY_FILE_1'
+          plugins {
+              id 'com.android.application' version '8.9.1' apply false
+          }
+          MOSHIFY_FILE_1
+          mkdir -p $(dirname gradle.properties)
+          cat > gradle.properties <<'MOSHIFY_FILE_2'
+          org.gradle.jvmargs=-Xmx2g -Dfile.encoding=UTF-8
+          android.useAndroidX=false
+          android.nonTransitiveRClass=true
+          MOSHIFY_FILE_2
+          mkdir -p $(dirname app/build.gradle)
+          cat > app/build.gradle <<'MOSHIFY_FILE_3'
+          plugins {
+              id 'com.android.application'
+          }
 
+          android {
+              namespace 'app.moshify'
+              compileSdk 35
+
+              defaultConfig {
+                  applicationId 'app.moshify'
+                  minSdk 29
+                  targetSdk 34
+                  versionCode 1
+                  versionName '1.0'
+              }
+              buildTypes {
+                  release { minifyEnabled false }
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          }
+          MOSHIFY_FILE_3
+          mkdir -p $(dirname app/src/main/AndroidManifest.xml)
+          cat > app/src/main/AndroidManifest.xml <<'MOSHIFY_FILE_4'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.CAMERA" />
+              <uses-feature android:name="android.hardware.camera" android:required="false" />
+              <application
+                  android:label="Moshify"
+                  android:icon="@mipmap/ic_launcher"
+                  android:allowBackup="true"
+                  android:hardwareAccelerated="true"
+                  android:theme="@style/AppTheme">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          MOSHIFY_FILE_4
+          mkdir -p $(dirname app/src/main/res/values/styles.xml)
+          cat > app/src/main/res/values/styles.xml <<'MOSHIFY_FILE_5'
+          <resources>
+              <style name="AppTheme" parent="android:Theme.Material.NoActionBar">
+                  <item name="android:statusBarColor">#0E0A1A</item>
+                  <item name="android:navigationBarColor">#0E0A1A</item>
+                  <item name="android:windowBackground">#0E0A1A</item>
+              </style>
+          </resources>
+          MOSHIFY_FILE_5
+          mkdir -p $(dirname app/src/main/res/drawable/ic_launcher_fg.xml)
+          cat > app/src/main/res/drawable/ic_launcher_fg.xml <<'MOSHIFY_FILE_6'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp" android:height="108dp"
+              android:viewportWidth="108" android:viewportHeight="108">
+              <path android:fillColor="#7C3AED" android:pathData="M30,34h30a4,4 0 0 1 4,4v26a4,4 0 0 1 -4,4h-30a4,4 0 0 1 -4,-4v-26a4,4 0 0 1 4,-4z"/>
+              <path android:fillColor="#B794FF" android:fillAlpha="0.9" android:pathData="M48,44h30a4,4 0 0 1 4,4v26a4,4 0 0 1 -4,4h-30a4,4 0 0 1 -4,-4v-26a4,4 0 0 1 4,-4z"/>
+              <path android:fillColor="#0E0A1A" android:fillAlpha="0.55" android:pathData="M48,56h18v6h-18z"/>
+          </vector>
+          MOSHIFY_FILE_6
+          mkdir -p $(dirname app/src/main/res/drawable/ic_launcher_bg.xml)
+          cat > app/src/main/res/drawable/ic_launcher_bg.xml <<'MOSHIFY_FILE_7'
+          <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+              <solid android:color="#0E0A1A"/>
+          </shape>
+          MOSHIFY_FILE_7
+          mkdir -p $(dirname app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml)
+          cat > app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml <<'MOSHIFY_FILE_8'
+          <?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@drawable/ic_launcher_bg"/>
+              <foreground android:drawable="@drawable/ic_launcher_fg"/>
+          </adaptive-icon>
+          MOSHIFY_FILE_8
+          mkdir -p $(dirname app/src/main/java/app/moshify/MainActivity.java)
+          cat > app/src/main/java/app/moshify/MainActivity.java <<'MOSHIFY_FILE_9'
+          package app.moshify;
+
+          import android.Manifest;
+          import android.app.Activity;
+          import android.content.ContentValues;
+          import android.content.Intent;
+          import android.content.pm.PackageManager;
+          import android.net.Uri;
+          import android.os.Bundle;
+          import android.provider.MediaStore;
+          import android.util.Base64;
+          import android.webkit.JavascriptInterface;
+          import android.webkit.PermissionRequest;
+          import android.webkit.ValueCallback;
+          import android.webkit.WebChromeClient;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+          import android.widget.Toast;
+
+          import java.io.OutputStream;
+
+          public class MainActivity extends Activity {
+              private static final int REQ_FILE = 1;
+              private static final int REQ_CAM = 2;
+              private PermissionRequest pendingPerm;
+              private WebView web;
+              private ValueCallback<Uri[]> fileCb;
+
+              @Override
+              protected void onCreate(Bundle b) {
+                  super.onCreate(b);
+                  web = new WebView(this);
+                  setContentView(web);
+
+                  WebSettings s = web.getSettings();
+                  s.setJavaScriptEnabled(true);
+                  s.setDomStorageEnabled(true);
+                  s.setAllowFileAccess(true);
+                  s.setMediaPlaybackRequiresUserGesture(false);
+
+                  web.setWebViewClient(new WebViewClient());
+                  web.setWebChromeClient(new WebChromeClient() {
+                      @Override
+                      public void onPermissionRequest(final PermissionRequest r) {
+                          runOnUiThread(() -> {
+                              boolean wantsCam = false;
+                              for (String x : r.getResources()) {
+                                  if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(x)) wantsCam = true;
+                              }
+                              if (!wantsCam) { r.deny(); return; }
+                              if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                                  r.grant(new String[]{PermissionRequest.RESOURCE_VIDEO_CAPTURE});
+                              } else {
+                                  pendingPerm = r;
+                                  requestPermissions(new String[]{Manifest.permission.CAMERA}, REQ_CAM);
+                              }
+                          });
+                      }
+
+                      @Override
+                      public boolean onShowFileChooser(WebView w, ValueCallback<Uri[]> cb, FileChooserParams p) {
+                          if (fileCb != null) fileCb.onReceiveValue(null);
+                          fileCb = cb;
+                          try {
+                              startActivityForResult(p.createIntent(), REQ_FILE);
+                          } catch (Exception e) {
+                              fileCb = null;
+                              return false;
+                          }
+                          return true;
+                      }
+                  });
+                  web.addJavascriptInterface(new Bridge(), "AndroidBridge");
+                  web.loadUrl("file:///android_asset/index.html");
+              }
+
+              @Override
+              protected void onActivityResult(int req, int res, Intent data) {
+                  if (req == REQ_FILE && fileCb != null) {
+                      fileCb.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(res, data));
+                      fileCb = null;
+                  }
+                  super.onActivityResult(req, res, data);
+              }
+
+              @Override
+              public void onRequestPermissionsResult(int code, String[] perms, int[] grants) {
+                  if (code == REQ_CAM && pendingPerm != null) {
+                      if (grants.length > 0 && grants[0] == PackageManager.PERMISSION_GRANTED) {
+                          pendingPerm.grant(new String[]{PermissionRequest.RESOURCE_VIDEO_CAPTURE});
+                      } else {
+                          pendingPerm.deny();
+                      }
+                      pendingPerm = null;
+                  }
+                  super.onRequestPermissionsResult(code, perms, grants);
+              }
+
+              @Override
+              public void onBackPressed() {
+                  finish();
+              }
+
+              private void report(final boolean ok) {
+                  runOnUiThread(() -> {
+                      Toast.makeText(this, ok ? "Saved to Movies/Moshify" : "Could not save the video", Toast.LENGTH_SHORT).show();
+                      web.evaluateJavascript("window.__saved&&window.__saved(" + ok + ")", null);
+                  });
+              }
+
+              private class Bridge {
+                  @JavascriptInterface
+                  public void saveVideo(String b64, String name, String mime) {
+                      try {
+                          byte[] data = Base64.decode(b64, Base64.DEFAULT);
+                          ContentValues v = new ContentValues();
+                          v.put(MediaStore.Video.Media.DISPLAY_NAME, name);
+                          v.put(MediaStore.Video.Media.MIME_TYPE, mime);
+                          v.put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/Moshify");
+                          v.put(MediaStore.Video.Media.IS_PENDING, 1);
+                          Uri uri = getContentResolver().insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, v);
+                          if (uri == null) { report(false); return; }
+                          try (OutputStream os = getContentResolver().openOutputStream(uri)) {
+                              os.write(data);
+                          }
+                          v.clear();
+                          v.put(MediaStore.Video.Media.IS_PENDING, 0);
+                          getContentResolver().update(uri, v, null, null);
+                          report(true);
+                      } catch (Exception e) {
+                          report(false);
+                      }
+                  }
+              }
+          }
+          MOSHIFY_FILE_9
+          mkdir -p $(dirname app/src/main/assets/index.html)
+          cat > app/src/main/assets/index.html <<'MOSHIFY_FILE_10'
+          <!doctype html><html lang="en" data-theme="dark"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:dark}html,body{margin:0}body{font-size:14px}img{max-width:100%}[hidden]{display:none!important}</style><title>Moshify</title>
+          <meta name="claude:viewport-fit-sides" content="cover">
+          <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;700&display=swap">
+          <style>
+          /* Layout: one centered column, stage on top, timeline, then a tabbed tray of presets and sliders. */
+          :root{
+            --bg:#0e0a1a; --surface:#181228; --raised:#231a3b; --fg:#f1ecff; --muted:#a094c8;
+            --line:#30254f; --accent:#7c3aed; --accent-hi:#b794ff; --accent-ink:#ffffff;
+            --accent-soft:rgba(124,58,237,.22); --danger:#ff6b8b;
+            --font-display:"Space Grotesk",system-ui,-apple-system,"Segoe UI",sans-serif;
+            --font-body:"Inter",system-ui,-apple-system,"Segoe UI",sans-serif;
+            color-scheme:dark;
+          }
+          @media (prefers-color-scheme: light){
+            :root:not([data-theme="dark"]){
+              --bg:#f7f4ff; --surface:#ffffff; --raised:#efe9ff; --fg:#1b1233; --muted:#665a8c;
+              --line:#ddd3f5; --accent:#6d28d9; --accent-hi:#6d28d9; --accent-ink:#ffffff;
+              --accent-soft:rgba(109,40,217,.14); --danger:#c2264b; color-scheme:light;
+            }
+          }
+          :root[data-theme="light"]{
+            --bg:#f7f4ff; --surface:#ffffff; --raised:#efe9ff; --fg:#1b1233; --muted:#665a8c;
+            --line:#ddd3f5; --accent:#6d28d9; --accent-hi:#6d28d9; --accent-ink:#ffffff;
+            --accent-soft:rgba(109,40,217,.14); --danger:#c2264b; color-scheme:light;
+          }
+          *{box-sizing:border-box}
+          body{background:var(--bg);color:var(--fg);font-family:var(--font-body);font-size:15px;line-height:1.45;
+            padding-block:12px 28px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+          .app{max-width:560px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+          button,input,label{font:inherit;color:inherit}
+          button{cursor:pointer}
+          :focus-visible{outline:2px solid var(--accent-hi);outline-offset:2px}
+          .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
+          .top{display:flex;align-items:center;justify-content:space-between;gap:12px}
+          .brand{display:flex;align-items:center;gap:10px;font-family:var(--font-display);font-weight:700;font-size:24px;letter-spacing:-.02em}
+          .brand svg{width:30px;height:30px;flex:none}
+          .actions{display:flex;gap:8px}
+          .btn{border:1px solid var(--line);background:var(--surface);border-radius:12px;padding:10px 16px;font-weight:600;
+            font-family:var(--font-display);display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:42px;user-select:none}
+          .btn:hover{background:var(--raised)}
+          .btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+          .btn.primary:hover{filter:brightness(1.1)}
+          .btn:disabled,.btn[aria-disabled="true"]{opacity:.45;pointer-events:none}
+          .btn.wide{flex:1}
+
+          .stage{position:relative;width:min(100%,calc(52vh * var(--ar,1.7778)));aspect-ratio:var(--ar,1.7778);margin-inline:auto;
+            background:#000;border-radius:16px;overflow:hidden;border:1px solid var(--line)}
+          .stage canvas{width:100%;height:100%;display:block}
+          .play{position:absolute;inset:0;margin:auto;width:68px;height:68px;border-radius:50%;border:0;background:rgba(14,10,26,.62);
+            backdrop-filter:blur(6px);display:grid;place-items:center;color:#fff;transition:opacity .15s}
+          .play svg{width:28px;height:28px}
+          .play .i-pause{display:none}
+          .stage.playing .play{opacity:0}
+          .stage.playing:hover .play,.stage.playing .play:focus-visible{opacity:1}
+          .stage.playing .play .i-play{display:none}
+          .stage.playing .play .i-pause{display:block}
+          .badge{position:absolute;top:10px;left:10px;background:var(--accent);color:#fff;font-family:var(--font-display);font-weight:700;
+            font-size:12px;letter-spacing:.12em;padding:4px 9px;border-radius:999px}
+          .note{margin:0;color:var(--muted);font-size:13px;text-align:center;min-height:1.4em}
+          .prog{display:flex;align-items:center;gap:10px}
+          .prog .bar{flex:1;height:8px;border-radius:99px;background:var(--raised);overflow:hidden}
+          .prog .bar i{display:block;height:100%;width:0;background:var(--accent)}
+          .prog .btn{min-height:34px;padding:4px 12px}
+
+          .transport{display:flex;flex-direction:column;gap:6px}
+          .tl{position:relative;height:44px}
+          .bands{position:absolute;left:0;right:0;top:14px;bottom:14px;border-radius:8px;background:var(--raised);overflow:hidden;border:1px solid var(--line)}
+          .bands i{position:absolute;top:0;bottom:0;background:var(--accent);opacity:.9}
+          #scrub{position:absolute;inset:0;width:100%;height:100%;margin:0;background:transparent;-webkit-appearance:none;appearance:none}
+          #scrub::-webkit-slider-runnable-track{background:transparent;height:44px}
+          #scrub::-moz-range-track{background:transparent;height:44px}
+          #scrub::-webkit-slider-thumb{-webkit-appearance:none;width:8px;height:40px;margin-top:2px;border-radius:6px;background:var(--fg);border:2px solid var(--accent)}
+          #scrub::-moz-range-thumb{width:6px;height:36px;border-radius:6px;background:var(--fg);border:2px solid var(--accent)}
+          .tl-meta{display:flex;justify-content:space-between;color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
+          .hitrow{display:flex;gap:8px;margin-top:4px}
+
+          .tray{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:12px;display:flex;flex-direction:column;gap:12px}
+          .tabs{display:grid;grid-template-columns:1fr 1fr;background:var(--raised);border-radius:12px;padding:4px;gap:4px}
+          .tab{border:0;background:transparent;border-radius:9px;padding:8px;font-family:var(--font-display);font-weight:600;color:var(--muted)}
+          .tab[aria-selected="true"]{background:var(--accent);color:var(--accent-ink)}
+          .presets{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+          @media (min-width:480px){.presets{grid-template-columns:repeat(3,minmax(0,1fr))}}
+          .chip{border:1px solid var(--line);background:var(--bg);border-radius:12px;padding:10px 12px;text-align:left;display:flex;flex-direction:column;gap:2px;min-width:0}
+          .chip b{font-family:var(--font-display);font-size:15px}
+          .chip span{color:var(--muted);font-size:12px}
+          .chip[aria-pressed="true"]{border-color:var(--accent-hi);background:var(--accent-soft)}
+          .sliders{display:flex;flex-direction:column;gap:12px}
+          .sl{display:grid;grid-template-columns:1fr auto;gap:2px 10px;align-items:center}
+          .sl label{font-weight:500}
+          .sl output{color:var(--accent-hi);font-variant-numeric:tabular-nums;font-size:13px}
+          .sl input[type=range]{grid-column:1/-1;width:100%;accent-color:var(--accent);margin:4px 0 0}
+          .row{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+          .seg{display:flex;gap:6px}
+          .seg button{border:1px solid var(--line);background:var(--bg);border-radius:10px;padding:6px 12px;font-size:13px}
+          .seg button[aria-pressed="true"]{border-color:var(--accent-hi);background:var(--accent-soft)}
+          .check{display:flex;align-items:center;gap:8px}
+          .check input{width:20px;height:20px;accent-color:var(--accent)}
+          .live{display:flex;flex-direction:column;gap:8px}
+          .live-row{display:flex;gap:8px}
+          .hold{width:100%;min-height:68px;font-size:18px;touch-action:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+          .hold.on{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+          #rec.on{background:var(--danger);border-color:var(--danger);color:#fff}
+          .stage.live .play{display:none}
+          [hidden]{display:none!important}
+          </style>
+
+          <main class="app">
+            <header class="top">
+              <div class="brand">
+                <svg viewBox="0 0 32 32" aria-hidden="true"><rect x="3" y="5" width="18" height="18" rx="4" fill="#7c3aed"/><rect x="11" y="9" width="18" height="18" rx="4" fill="#b794ff" opacity=".85"/><rect x="11" y="15" width="10" height="4" fill="#0e0a1a" opacity=".55"/><rect x="17" y="21" width="8" height="3" fill="#0e0a1a" opacity=".4"/></svg>
+                <span>moshify</span>
+              </div>
+              <div class="actions">
+                <label class="btn" for="file">Import</label>
+                <input id="file" class="sr" type="file" accept="video/*">
+                <button id="export" class="btn primary" type="button">Export</button>
+              </div>
+            </header>
+
+            <section>
+              <div class="stage" id="stage">
+                <canvas id="view" aria-label="Video preview"></canvas>
+                <button id="play" class="play" type="button" aria-label="Play">
+                  <svg class="i-play" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                  <svg class="i-pause" viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>
+                </button>
+                <span id="badge" class="badge" hidden>MOSH</span>
+              </div>
+              <p id="note" class="note" role="status" aria-live="polite">Demo clip. Hold the button to mosh it, or import a video or open the camera.</p>
+              <div id="prog" class="prog" hidden>
+                <div class="bar"><i id="progbar"></i></div>
+                <button id="cancel" class="btn" type="button">Cancel</button>
+              </div>
+            </section>
+
+            <section class="live" aria-label="Live controls">
+              <button id="hold" class="btn primary hold" type="button">Hold to mosh</button>
+              <div class="live-row">
+                <button id="cam" class="btn wide" type="button">Camera</button>
+                <button id="flip" class="btn" type="button" hidden>Flip</button>
+                <button id="rec" class="btn wide" type="button">Record</button>
+              </div>
+            </section>
+
+            <section class="transport">
+              <div class="tl">
+                <div class="bands" id="bands"></div>
+                <input id="scrub" type="range" min="0" max="1000" value="0" aria-label="Timeline position">
+              </div>
+              <div class="tl-meta"><span id="time">0:00.0</span><span id="dur">0:08.0</span></div>
+              <div class="hitrow">
+                <button id="hit" class="btn primary wide" type="button">Hit mosh here</button>
+                <button id="auto" class="btn" type="button">Auto</button>
+                <button id="clear" class="btn" type="button">Clear</button>
+              </div>
+            </section>
+
+            <section class="tray">
+              <div class="tabs" role="tablist">
+                <button class="tab" role="tab" id="tab-presets" aria-selected="true" aria-controls="panel-presets" type="button">Presets</button>
+                <button class="tab" role="tab" id="tab-tweak" aria-selected="false" aria-controls="panel-tweak" type="button">Tweak</button>
+              </div>
+              <div id="panel-presets" role="tabpanel" aria-labelledby="tab-presets">
+                <div class="presets" id="presets"></div>
+              </div>
+              <div id="panel-tweak" role="tabpanel" aria-labelledby="tab-tweak" hidden>
+                <div class="sliders" id="sliders"></div>
+                <div class="row" style="margin-top:14px">
+                  <label class="check" for="spread"><input id="spread" type="checkbox"> Bloom spread</label>
+                  <div class="seg" id="quality" role="group" aria-label="Render size">
+                    <button type="button" data-q="480" aria-pressed="true">Fast 480</button>
+                    <button type="button" data-q="720" aria-pressed="false">HD 720</button>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </main>
+
+          <script>
+          (function(){
+          'use strict';
+          const $=s=>document.querySelector(s);
+          const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+
+          /* ---------- state ---------- */
+          const S={t:0,dur:8,playing:false,segs:[{s:2,e:5}],ar:16/9,live:false};
+          let holding=false,camStream=null,facing='user';
+          const P={k:1,melt:0,glitch:.1,block:8,clarity:0,refresh:0,length:3,spread:false};
+          const PRESETS=[
+            {id:'smear',name:'Smear',sub:'Classic drag',v:{k:1,melt:0,glitch:.1,block:8,clarity:0,refresh:0,spread:false}},
+            {id:'bloom',name:'Bloom',sub:'Pixels swell and smudge',v:{k:2.2,melt:0,glitch:.05,block:10,clarity:0,refresh:0,spread:true}},
+            {id:'melt',name:'Melt',sub:'Drips downward',v:{k:1,melt:1.4,glitch:.1,block:8,clarity:.04,refresh:0,spread:true}},
+            {id:'freeze',name:'Freeze',sub:'Held frame, glitchy',v:{k:0,melt:0,glitch:.35,block:12,clarity:0,refresh:0,spread:false}},
+            {id:'tear',name:'Tear',sub:'Big blocks, stutter',v:{k:1.4,melt:0,glitch:.7,block:16,clarity:.02,refresh:1.2,spread:false}},
+            {id:'chaos',name:'Chaos',sub:'Everything at once',v:{k:3,melt:.6,glitch:1,block:6,clarity:0,refresh:.8,spread:false}}
+          ];
+          const SLIDERS=[
+            {k:'k',label:'Intensity',min:0,max:4,step:.1,fmt:v=>v.toFixed(1)+'×'},
+            {k:'melt',label:'Melt',min:0,max:3,step:.1,fmt:v=>v.toFixed(1)},
+            {k:'glitch',label:'Glitch',min:0,max:1,step:.05,fmt:v=>Math.round(v*100)+'%'},
+            {k:'block',label:'Block size',min:6,max:20,step:1,fmt:v=>v+' px'},
+            {k:'clarity',label:'Clarity',min:0,max:.3,step:.01,fmt:v=>Math.round(v/.3*100)+'%'},
+            {k:'refresh',label:'Refresh frame',min:0,max:3,step:.1,fmt:v=>v===0?'Off':v.toFixed(1)+' s'},
+            {k:'length',label:'Mosh length',min:.5,max:10,step:.5,fmt:v=>v.toFixed(1)+' s'}
+          ];
+
+          /* ---------- canvases ---------- */
+          const view=$('#view'),vctx=view.getContext('2d');
+          const srcC=document.createElement('canvas'),sctx=srcC.getContext('2d');
+          let accC=document.createElement('canvas'),aCtx=accC.getContext('2d');
+          let nxtC=document.createElement('canvas'),nCtx=nxtC.getContext('2d');
+          const estC=document.createElement('canvas'),estCtx=estC.getContext('2d',{willReadFrequently:true});
+          let W=640,H=360,EW=256,EH=144,QUAL=480;
+          let curL=new Uint8Array(1),prevL=new Uint8Array(1),vx=new Float32Array(1),vy=new Float32Array(1),sx_=new Float32Array(1),sy_=new Float32Array(1);
+          let seeded=false,seedT=0;
+
+          function setSize(){
+            const L=QUAL,a=S.ar;
+            if(a>=1){W=L;H=Math.round(L/a);}else{H=L;W=Math.round(L*a);}
+            W&=~1;H&=~1;
+            for(const c of [view,srcC,accC,nxtC]){c.width=W;c.height=H;}
+            EW=256;EH=Math.max(16,Math.round(EW*H/W));
+            estC.width=EW;estC.height=EH;
+            curL=new Uint8Array(EW*EH);prevL=new Uint8Array(EW*EH);
+            $('#stage').style.setProperty('--ar',String(W/H));
+            resetMosh();
+          }
+          function resetMosh(){seeded=false;}
+
+          /* ---------- sources ---------- */
+          let vid=null,vidUrl=null;
+          function drawDemo(c,w,h,t){
+            const g=c.createLinearGradient(0,0,w,h);
+            g.addColorStop(0,'hsl('+(260+Math.sin(t*.7)*30)+',70%,22%)');
+            g.addColorStop(1,'hsl('+(310+Math.cos(t*.5)*30)+',75%,38%)');
+            c.fillStyle=g;c.fillRect(0,0,w,h);
+            c.fillStyle='rgba(255,255,255,.07)';
+            const sw=w/10,off=(t*60)%(sw*2);
+            for(let x=-sw*2+off;x<w;x+=sw*2)c.fillRect(x,0,sw,h);
+            for(let i=0;i<5;i++){
+              const a=t*(.6+i*.23)+i*1.7;
+              const x=w/2+Math.cos(a)*w*.34,y=h/2+Math.sin(a*1.3)*h*.3,r=Math.min(w,h)*(.07+.03*i);
+              c.fillStyle='hsl('+(280+i*28)+',85%,'+(55+i*4)+'%)';
+              c.beginPath();c.arc(x,y,r,0,7);c.fill();
+            }
+            c.save();c.translate(w*.5+Math.sin(t)*w*.2,h*.5);c.rotate(t*1.2);
+            const s=Math.min(w,h)*.2;
+            c.fillStyle='#f5f0ff';c.fillRect(-s/2,-s/2,s,s);
+            c.fillStyle='#7c3aed';c.fillRect(-s/4,-s/4,s/2,s/2);
+            c.restore();
+            c.fillStyle='#fff';c.font='700 '+Math.round(h*.12)+'px "Space Grotesk",system-ui,sans-serif';
+            c.textAlign='center';c.fillText('MOSHIFY',w/2+Math.sin(t*1.5)*w*.18,h*.88);
+          }
+          function paintSource(){
+            if(vid&&vid.readyState>=2)sctx.drawImage(vid,0,0,W,H);
+            else if(!vid)drawDemo(sctx,W,H,S.t);
+          }
+
+          /* ---------- datamosh engine ---------- */
+          let mvx=0,mvy=0;
+          function sad(cur,prev,bx,by,dx,dy,B,limit){
+            const px=bx+dx,py=by+dy;
+            if(px<0||py<0||px+B>EW||py+B>EH)return 1e9;
+            let s=0;
+            for(let y=0;y<B;y++){
+              let ci=(by+y)*EW+bx,pi=(py+y)*EW+px;
+              for(let x=0;x<B;x++){const d=cur[ci++]-prev[pi++];s+=d<0?-d:d;}
+              if(s>=limit)return s;
+            }
+            return s;
+          }
+          function search(cur,prev,bx,by,B){
+            let best=sad(cur,prev,bx,by,0,0,B,1e9),cx=0,cy=0;
+            if(best<B*B*1.5){mvx=0;mvy=0;return;}
+            for(let step=8;step>=1;step>>=1){
+              let nx2=cx,ny2=cy;
+              for(let oy=-1;oy<=1;oy++)for(let ox=-1;ox<=1;ox++){
+                if(!ox&&!oy)continue;
+                const dx=cx+ox*step,dy=cy+oy*step;
+                const s=sad(cur,prev,bx,by,dx,dy,B,best);
+                if(s<best){best=s;nx2=dx;ny2=dy;}
+              }
+              cx=nx2;cy=ny2;
+            }
+            mvx=cx;mvy=cy;
+          }
+          function mosh(){
+            estCtx.drawImage(srcC,0,0,EW,EH);
+            const d=estCtx.getImageData(0,0,EW,EH).data;
+            for(let i=0,j=0;i<curL.length;i++,j+=4)curL[i]=(d[j]*77+d[j+1]*150+d[j+2]*29)>>8;
+            if(!seeded||(P.refresh>0&&S.t-seedT>=P.refresh)){
+              aCtx.drawImage(srcC,0,0);seeded=true;seedT=S.t;
+              const t=curL;curL=prevL;prevL=t;return;
+            }
+            const B=Math.round(P.block),nx=Math.max(1,Math.floor(EW/B)),ny=Math.max(1,Math.floor(EH/B)),n=nx*ny;
+            if(vx.length!==n){vx=new Float32Array(n);vy=new Float32Array(n);sx_=new Float32Array(n);sy_=new Float32Array(n);}
+            if(P.k>0){
+              for(let j=0;j<ny;j++)for(let i=0;i<nx;i++){
+                search(curL,prevL,i*B,j*B,B);
+                vx[j*nx+i]=mvx;vy[j*nx+i]=mvy;
+              }
+              if(P.spread){
+                for(let j=0;j<ny;j++)for(let i=0;i<nx;i++){
+                  let ax=0,ay=0,c=0;
+                  for(let oj=-1;oj<=1;oj++)for(let oi=-1;oi<=1;oi++){
+                    const ii=i+oi,jj=j+oj;
+                    if(ii<0||jj<0||ii>=nx||jj>=ny)continue;
+                    ax+=vx[jj*nx+ii];ay+=vy[jj*nx+ii];c++;
+                  }
+                  sx_[j*nx+i]=ax/c;sy_[j*nx+i]=ay/c;
+                }
+              }else{sx_.set(vx);sy_.set(vy);}
+            }else{sx_.fill(0);sy_.fill(0);}
+            const sc=W/EW,k=P.k;
+            nCtx.globalAlpha=1;
+            nCtx.drawImage(accC,0,0);
+            for(let j=0;j<ny;j++)for(let i=0;i<nx;i++){
+              const idx=j*nx+i;
+              let dx=sx_[idx],dy=sy_[idx];
+              if(P.melt)dy-=P.melt*(.6+.6*Math.sin(i*1.7+S.t*2.3));
+              if(P.glitch&&Math.random()<P.glitch*.04){dx+=(Math.random()*2-1)*10;dy+=(Math.random()*2-1)*10;}
+              const x0=Math.round(i*W/nx),x1=Math.round((i+1)*W/nx),y0=Math.round(j*H/ny),y1=Math.round((j+1)*H/ny);
+              const bw=x1-x0,bh=y1-y0;
+              const fx=P.melt&&k===0?1:k;
+              const sx=Math.round(clamp(x0+dx*sc*(k===0?1:fx),0,W-bw)),sy=Math.round(clamp(y0+dy*sc*(k===0?1:fx),0,H-bh));
+              if(sx===x0&&sy===y0)continue;
+              nCtx.drawImage(accC,sx,sy,bw,bh,x0,y0,bw,bh);
+            }
+            if(P.glitch&&Math.random()<P.glitch*.12){
+              const hh=Math.round(H*(.02+Math.random()*.08)),y=Math.round(Math.random()*(H-hh)),sh=Math.round((Math.random()*2-1)*W*.15);
+              nCtx.drawImage(accC,0,y,W,hh,sh,y,W,hh);
+            }
+            if(P.clarity>0){nCtx.globalAlpha=P.clarity;nCtx.drawImage(srcC,0,0);nCtx.globalAlpha=1;}
+            let t=accC;accC=nxtC;nxtC=t;
+            let c=aCtx;aCtx=nCtx;nCtx=c;
+            const l=curL;curL=prevL;prevL=l;
+          }
+          function segAt(t){for(const g of S.segs)if(t>=g.s&&t<g.e)return g;return null;}
+          function step(){
+            paintSource();
+            const g=segAt(S.t)||holding;
+            if(g){mosh();vctx.drawImage(accC,0,0);}
+            else{seeded=false;vctx.drawImage(srcC,0,0);}
+            $('#badge').hidden=!g;
+          }
+          function showPaused(){paintSource();seeded=false;vctx.drawImage(srcC,0,0);$('#badge').hidden=true;updateUI();}
+
+          /* ---------- transport ---------- */
+          let lastProc=0,lastT=0;
+          function loop(now){
+            requestAnimationFrame(loop);
+            if(!S.playing){lastProc=now;return;}
+            const el=(now-lastProc)/1000;
+            if(el<.028)return;
+            lastProc=now;
+            if(vid){
+              if(vid.currentTime<lastT-.3&&!exporting)resetMosh();
+              S.t=vid.currentTime;lastT=S.t;
+            }else{
+              S.t+=Math.min(el,.1);
+              if(S.t>=S.dur){if(exporting){finishExport();return;}S.t=0;resetMosh();}
+            }
+            step();updateUI();
+          }
+          async function play(){
+            S.playing=true;resetMosh();
+            if(vid){try{await vid.play();}catch(e){S.playing=false;note('Tap play again to start.');}}
+            updateUI();
+          }
+          function pause(){S.playing=false;if(vid)vid.pause();updateUI();}
+          function seek(t){
+            S.t=clamp(t,0,S.dur);lastT=S.t;resetMosh();
+            if(vid)vid.currentTime=S.t;
+            else if(!S.playing)showPaused();
+            updateUI();
+          }
+          const fmt=t=>{t=Math.max(0,t);const m=Math.floor(t/60),s=t-m*60;return m+':'+(s<10?'0':'')+s.toFixed(1);};
+          let scrubbing=false;
+          function updateUI(){
+            $('#stage').classList.toggle('playing',S.playing);
+            $('#play').setAttribute('aria-label',S.playing?'Pause':'Play');
+            $('#time').textContent=fmt(S.t);$('#dur').textContent=fmt(S.dur);
+            if(!scrubbing)$('#scrub').value=String(Math.round(S.t/S.dur*1000));
+            if(exporting)$('#progbar').style.width=(S.t/S.dur*100)+'%';
+          }
+          function renderBands(){
+            $('#bands').innerHTML=S.segs.map(g=>'<i style="left:'+(g.s/S.dur*100)+'%;width:'+((g.e-g.s)/S.dur*100)+'%"></i>').join('');
+          }
+          function note(m){$('#note').textContent=m;}
+
+          /* ---------- import ---------- */
+          function loadVideo(f){
+            if(exporting||recording)return;
+            pause();
+            const url=URL.createObjectURL(f);
+            const v=document.createElement('video');
+            v.muted=true;v.playsInline=true;v.loop=true;v.preload='auto';v.setAttribute('playsinline','');
+            v.onerror=()=>{URL.revokeObjectURL(url);note("This video can't be opened here. Try an MP4 or WebM file.");};
+            v.addEventListener('loadedmetadata',()=>{
+              if(!isFinite(v.duration)||!v.videoWidth){URL.revokeObjectURL(url);note("This video can't be read. Try an MP4 or WebM file.");return;}
+              if(S.live)stopCamera(false);
+              if(vidUrl)URL.revokeObjectURL(vidUrl);
+              vid=v;vidUrl=url;
+              S.dur=v.duration;S.ar=v.videoWidth/v.videoHeight;S.t=0;lastT=0;
+              const s=S.dur*.25;S.segs=[{s,e:Math.min(S.dur,s+P.length)}];
+              setSize();renderBands();updateUI();
+              note(f.name+' · '+fmt(S.dur)+'. Press play.');
+            });
+            v.addEventListener('loadeddata',()=>{if(vid===v&&!S.playing)showPaused();});
+            v.addEventListener('seeked',()=>{if(vid===v&&!S.playing)showPaused();});
+            v.addEventListener('ended',()=>{if(vid===v&&exporting)finishExport();});
+            v.src=url;
+          }
+
+          /* ---------- recording, export, live ---------- */
+          let exporting=false,rec=null,chunks=[],cancelled=false,recMode='export',recording=false;
+          function pickMime(){
+            if(!window.MediaRecorder)return'';
+            const c=['video/mp4;codecs=avc1.42E01E','video/webm;codecs=vp9','video/webm;codecs=vp8','video/webm','video/mp4'];
+            return c.find(m=>MediaRecorder.isTypeSupported(m))||'';
+          }
+          function setBusy(b){
+            $('#prog').hidden=!b;$('#export').disabled=b||S.live;
+            for(const id of ['hit','auto','clear','cam','flip','rec','hold','file','scrub'])$('#'+id).disabled=b;
+            document.querySelector('label[for=file]').setAttribute('aria-disabled',String(b));
+          }
+          function setLiveUI(){
+            $('#stage').classList.toggle('live',S.live);
+            document.querySelector('.transport').hidden=S.live;
+            $('#flip').hidden=!S.live;
+            $('#cam').textContent=S.live?'Stop camera':'Camera';
+            $('#export').disabled=S.live||exporting;
+          }
+          function beginRec(mode){
+            if(!view.captureStream||!window.MediaRecorder){note('This browser cannot record video. Try Chrome.');return false;}
+            const mime=pickMime();
+            const opts={videoBitsPerSecond:6e6};if(mime)opts.mimeType=mime;
+            try{rec=new MediaRecorder(view.captureStream(30),opts);}
+            catch(e){rec=null;note('Recording is not available here.');return false;}
+            chunks=[];cancelled=false;recMode=mode;
+            rec.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data);};
+            rec.onstop=onRecStop;
+            rec.start(250);
+            return true;
+          }
+          async function startExport(){
+            if(exporting||recording)return;
+            if(S.live){note('In camera mode, use Record.');return;}
+            if(!S.segs.length){note('Add a mosh first: move the playhead and tap Hit mosh here.');return;}
+            pause();exporting=true;setBusy(true);note('Rendering in real time. Keep this tab open.');
+            if(vid){
+              vid.loop=false;
+              if(vid.currentTime>.01){vid.currentTime=0;await new Promise(r=>vid.addEventListener('seeked',r,{once:true}));}
+            }
+            S.t=0;lastT=0;resetMosh();
+            if(!beginRec('export')){exporting=false;setBusy(false);return;}
+            S.playing=true;
+            if(vid){try{await vid.play();}catch(e){cancelExport();note('Playback was blocked. Tap Export again.');}}
+            updateUI();
+          }
+          function toggleRec(){
+            if(exporting)return;
+            if(recording){finishExport();return;}
+            if(!beginRec('manual'))return;
+            recording=true;
+            $('#rec').textContent='Stop';$('#rec').classList.add('on');
+            if(!S.playing)play();
+            note('Recording what you see. Tap Stop to save.');
+          }
+          function finishExport(){
+            if(!rec)return;
+            const r=rec;rec=null;
+            if(recMode==='export'){S.playing=false;if(vid)vid.pause();}
+            try{r.stop();}catch(e){}
+          }
+          function cancelExport(){cancelled=true;finishExport();}
+          async function onRecStop(){
+            const type=(this&&this.mimeType)||'video/webm';
+            if(recMode==='export'){
+              exporting=false;setBusy(false);
+              if(vid)vid.loop=true;
+              S.t=0;lastT=0;if(vid)vid.currentTime=0;
+              showPaused();
+            }else{
+              recording=false;$('#rec').textContent='Record';$('#rec').classList.remove('on');
+            }
+            if(cancelled||!chunks.length){note(cancelled?'Export cancelled.':'Nothing was recorded.');return;}
+            const blob=new Blob(chunks,{type});
+            const ext=type.indexOf('mp4')>=0?'mp4':'webm';
+            const d=new Date(),p=n=>String(n).padStart(2,'0');
+            const name='moshify-'+d.getFullYear()+p(d.getMonth()+1)+p(d.getDate())+'-'+p(d.getHours())+p(d.getMinutes())+p(d.getSeconds())+'.'+ext;
+            note(await saveBlob(blob,name));
+          }
+
+          /* live camera */
+          async function startCamera(face){
+            if(exporting)return;
+            if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
+              note('The camera is not available in this view. Use the Android app or open Moshify in a browser.');return;
+            }
+            if(camStream){camStream.getTracks().forEach(t=>t.stop());camStream=null;}
+            pause();
+            let stream;
+            try{stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:face,width:{ideal:1280},height:{ideal:720}},audio:false});}
+            catch(e){
+              if(S.live)stopCamera(true);
+              note('Camera blocked ('+((e&&e.name)||'error')+'). Allow camera access and try again.');return;
+            }
+            const v=document.createElement('video');
+            v.muted=true;v.playsInline=true;v.setAttribute('playsinline','');v.srcObject=stream;
+            try{await v.play();}catch(e){}
+            if(!v.videoWidth)await new Promise(r=>v.addEventListener('loadedmetadata',r,{once:true}));
+            if(vidUrl){URL.revokeObjectURL(vidUrl);vidUrl=null;}
+            vid=v;camStream=stream;facing=face;
+            S.live=true;S.dur=1;S.t=0;lastT=0;S.segs=[];S.ar=v.videoWidth/v.videoHeight;
+            setSize();renderBands();setLiveUI();
+            S.playing=true;resetMosh();updateUI();
+            note('Live. Hold the button to mosh.');
+          }
+          function stopCamera(restore){
+            if(recording)finishExport();
+            if(camStream){camStream.getTracks().forEach(t=>t.stop());camStream=null;}
+            S.live=false;
+            if(restore){
+              vid=null;S.dur=8;S.ar=16/9;S.t=0;lastT=0;S.segs=[{s:2,e:5}];S.playing=false;
+              setSize();renderBands();showPaused();note('Back to the demo clip.');
+            }
+            setLiveUI();updateUI();
+          }
+
+          /* hold to mosh */
+          function holdOn(e){
+            if(holding||exporting)return;
+            if(e&&e.preventDefault)e.preventDefault();
+            holding=true;$('#hold').classList.add('on');resetMosh();
+            if(!S.playing)play();
+          }
+          function holdOff(){
+            if(!holding)return;
+            holding=false;$('#hold').classList.remove('on');resetMosh();
+          }
+
+          async function saveBlob(blob,name){
+            try{
+              if(window.claude&&window.claude.use){
+                const dl=await window.claude.use('downloads');
+                if(dl){await dl.save({filename:name,data:blob});return'Saved '+name+'.';}
+              }
+            }catch(e){
+              if(e&&e.code==='declined')return'Save cancelled.';
+              return'Could not save the video here ('+((e&&e.code)||'error')+').';
+            }
+            if(window.AndroidBridge){
+              return new Promise(res=>{
+                window.__saved=ok=>res(ok?'Saved to Movies/Moshify.':'Could not save the video.');
+                const fr=new FileReader();
+                fr.onload=()=>window.AndroidBridge.saveVideo(String(fr.result).split(',')[1],name,blob.type.split(';')[0]);
+                fr.readAsDataURL(blob);
+              });
+            }
+            const a=document.createElement('a');
+            a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();a.remove();
+            return'Downloaded '+name+'.';
+          }
+
+          /* ---------- controls ---------- */
+          function buildUI(){
+            $('#presets').innerHTML=PRESETS.map(p=>'<button type="button" class="chip" data-p="'+p.id+'" aria-pressed="false"><b>'+p.name+'</b><span>'+p.sub+'</span></button>').join('');
+            $('#sliders').innerHTML=SLIDERS.map(s=>'<div class="sl"><label for="s-'+s.k+'">'+s.label+'</label><output id="o-'+s.k+'" for="s-'+s.k+'"></output><input id="s-'+s.k+'" type="range" min="'+s.min+'" max="'+s.max+'" step="'+s.step+'"></div>').join('');
+            for(const s of SLIDERS){
+              $('#s-'+s.k).addEventListener('input',e=>{P[s.k]=+e.target.value;syncSliders();markPreset(null);});
+            }
+            $('#presets').addEventListener('click',e=>{
+              const b=e.target.closest('.chip');if(!b)return;
+              const p=PRESETS.find(x=>x.id===b.dataset.p);
+              Object.assign(P,p.v);syncSliders();markPreset(p.id);resetMosh();
+            });
+            $('#spread').addEventListener('change',e=>{P.spread=e.target.checked;markPreset(null);});
+            $('#quality').addEventListener('click',e=>{
+              const b=e.target.closest('button');if(!b||exporting)return;
+              QUAL=+b.dataset.q;
+              for(const x of $('#quality').children)x.setAttribute('aria-pressed',String(x===b));
+              setSize();if(!S.playing)showPaused();
+            });
+            const tabs={presets:$('#tab-presets'),tweak:$('#tab-tweak')};
+            for(const id in tabs){
+              tabs[id].addEventListener('click',()=>{
+                for(const o in tabs){
+                  tabs[o].setAttribute('aria-selected',String(o===id));
+                  $('#panel-'+o).hidden=o!==id;
+                }
+              });
+            }
+          }
+          function syncSliders(){
+            for(const s of SLIDERS){$('#s-'+s.k).value=P[s.k];$('#o-'+s.k).textContent=s.fmt(+P[s.k]);}
+            $('#spread').checked=P.spread;
+          }
+          function markPreset(id){
+            for(const b of $('#presets').children)b.setAttribute('aria-pressed',String(b.dataset.p===id));
+          }
+
+          /* ---------- wiring ---------- */
+          $('#play').addEventListener('click',e=>{e.stopPropagation();S.playing?pause():play();});
+          $('#stage').addEventListener('click',()=>{if(!exporting&&!S.live)S.playing?pause():play();});
+          $('#scrub').addEventListener('pointerdown',()=>{scrubbing=true;});
+          window.addEventListener('pointerup',()=>{scrubbing=false;});
+          $('#scrub').addEventListener('input',e=>seek(+e.target.value/1000*S.dur));
+          $('#hit').addEventListener('click',()=>{
+            const s=S.t,e=Math.min(S.dur,s+P.length);
+            if(e-s<.2){note('Move the playhead earlier to place a mosh.');return;}
+            S.segs.push({s,e});renderBands();note('Mosh added at '+fmt(s)+'.');
+          });
+          $('#auto').addEventListener('click',()=>{
+            const n=3,zone=S.dur/n;S.segs=[];
+            for(let i=0;i<n;i++){const len=Math.min(P.length,zone*.8),s=i*zone+Math.random()*(zone-len);S.segs.push({s,e:s+len});}
+            renderBands();note('Three moshes placed at random.');
+          });
+          $('#clear').addEventListener('click',()=>{S.segs=[];renderBands();resetMosh();if(!S.playing)showPaused();note('Moshes cleared. Source plays unchanged.');});
+          $('#file').addEventListener('change',e=>{const f=e.target.files&&e.target.files[0];if(f)loadVideo(f);e.target.value='';});
+          $('#export').addEventListener('click',startExport);
+          $('#cancel').addEventListener('click',cancelExport);
+          $('#cam').addEventListener('click',()=>{if(S.live)stopCamera(true);else startCamera('user');});
+          $('#flip').addEventListener('click',()=>startCamera(facing==='user'?'environment':'user'));
+          $('#rec').addEventListener('click',toggleRec);
+          const holdBtn=$('#hold');
+          holdBtn.addEventListener('pointerdown',e=>{try{holdBtn.setPointerCapture(e.pointerId);}catch(x){}holdOn(e);});
+          for(const ev of ['pointerup','pointercancel','lostpointercapture'])holdBtn.addEventListener(ev,holdOff);
+          holdBtn.addEventListener('contextmenu',e=>e.preventDefault());
+          window.addEventListener('keydown',e=>{
+            const tag=e.target&&e.target.tagName;
+            if(e.code==='Space'&&!e.repeat&&tag!=='INPUT'&&tag!=='BUTTON'&&tag!=='TEXTAREA'){holdOn(e);}
+          });
+          window.addEventListener('keyup',e=>{if(e.code==='Space')holdOff();});
+
+          buildUI();syncSliders();markPreset('smear');
+          setSize();renderBands();showPaused();
+          requestAnimationFrame(loop);
+          })();
+          </script>
+          </body></html>
+          MOSHIFY_FILE_10
+      - name: Build debug APK
+        run: gradle assembleDebug --no-daemon
       - uses: actions/upload-artifact@v4
         with:
-          name: qvm_soft
-          path: '**/qvm_soft.exe'
+          name: moshify-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
